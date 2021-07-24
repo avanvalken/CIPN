@@ -1,0 +1,1946 @@
+---
+title: "CIPN_D7"
+author: "avanvalken"
+date: "7/21/2021"
+output:
+  html_document:
+    code_folding: hide
+    toc: true
+    toc_float: true
+    theme: "flatly"
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+suppressPackageStartupMessages({
+  library(SummarizedExperiment)
+  library(edgeR)
+  library(sva)
+  library(SingleCellExperiment)
+  library(singleCellTK)
+  library(DESeq2)
+  library(TBSignatureProfiler)
+  library(DT)
+  library(enrichR)
+  library(Rtsne)
+  library(umap)
+  library(ggplot2)
+  library(ComplexHeatmap)
+  library(tidyverse)
+  library(stringi)
+  library(hypeR)
+  library(knitr)
+  library(kableExtra)
+  #library(cutpointr)
+  
+  
+})
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+# Load Data {.tabset}
+Make SE objects for each day
+
+## D7 DRG
+```{r}
+# D7 DRG
+counts <- read.table("D07_DRG/count", header = TRUE)
+counts <- counts[,-c(2:6)]
+counts <- column_to_rownames(counts, var = "Geneid")
+
+annot <- read.table("D07_DRG/annotation.txt", header = TRUE)
+
+# change colnames to sample names
+colnames(counts) <- 1:16
+
+DRG_d7 <- SummarizedExperiment(assays = as.matrix(counts), 
+                               colData = DataFrame(annot),)
+names(assays(DRG_d7)) <- "counts"
+
+#saveRDS(DRG_d7, "DRG_d7.RDS")
+
+# Process SE
+indata <- DRG_d7
+indata <- indata[apply(assay(indata,"counts") != 0, 1, mean)>.2,] 
+indata  = mkAssay(indata, log = TRUE, counts_to_CPM = TRUE)
+
+DRG_d7 <- indata
+
+```
+
+## D7 PAG
+```{r}
+# D7 PAG
+counts <- read.table("D07_PAG/count", header = TRUE)
+counts <- counts[,-c(2:6)]
+counts <- column_to_rownames(counts, var = "Geneid")
+
+annot <- read.table("D07_PAG/annotation.txt", header = TRUE)
+
+# change colnames to sample names
+colnames(counts) <- annot$sample[-c(28)] #missing sample 28
+
+annot <- annot[-c(28),]
+
+PAG_d7 <- SummarizedExperiment(assays = as.matrix(counts), 
+                               colData = DataFrame(annot),)
+names(assays(PAG_d7)) <- "counts"
+
+saveRDS(PAG_d7, "PAG_d7.RDS")
+
+# Process SE
+indata <- PAG_d7
+indata <- indata[apply(assay(indata,"counts") != 0, 1, mean)>.2,] 
+indata  = mkAssay(indata, log = TRUE, counts_to_CPM = TRUE)
+
+PAG_d7 <- indata
+
+```
+
+## D7 spinal_chord
+```{r}
+# D7 spinal_chord
+counts <- read.table("D07_spinal_chord/count", header = TRUE)
+counts <- counts[,-c(2:6)]
+counts <- column_to_rownames(counts, var = "Geneid")
+
+annot <- read.table("D07_spinal_chord/annotation.txt", header = TRUE)
+
+# change colnames to sample names
+colnames(counts) <- annot$sample
+
+spinal_chord_d7 <- SummarizedExperiment(assays = as.matrix(counts), 
+                               colData = DataFrame(annot),)
+names(assays(spinal_chord_d7)) <- "counts"
+
+saveRDS(spinal_chord_d7, "spinal_chord_d7.RDS")
+
+# Process SE
+indata <- spinal_chord_d7
+indata <- indata[apply(assay(indata,"counts") != 0, 1, mean)>.2,] 
+indata  = mkAssay(indata, log = TRUE, counts_to_CPM = TRUE)
+
+spinal_chord_d7 <- indata
+
+```
+
+
+
+
+
+# D7 Analysis {.tabset}
+## D7 DRG {.tabset}
+### Dimension Reduction {.tabset}
+#### PCA {.tabset}
+```{r}
+indata <- DRG_d7
+
+indata_tmp <- SummarizedExperiment(assays=list(counts=assays(indata)$log_cpm),
+                     colData = colData(indata))
+
+plotPCA(DESeqTransform(indata_tmp), intgroup = c("tx",  "sex"))
+
+
+```
+
+```{r}
+plotPCA(DESeqTransform(indata_tmp), intgroup = c("tx",  "genotype"))
+
+```
+
+#### tSNE {.tabset}
+```{r}
+assay_type = "log_cpm"
+
+set.seed(1)
+tsne_out <- Rtsne(t(assay(indata,assay_type)), check_duplicates = FALSE, pca = TRUE, perplexity=5, theta=0.5, dims=2) # why does it say perplexity is too large? Changed from 10 to 5
+
+embedding <- as.data.frame(tsne_out$Y)
+embedding$Class <- (indata$tx )
+embedding$sex <- indata$sex
+embedding$genotype <- indata$genotype
+
+
+g <- ggplot(embedding, 
+            aes(x=V1, y=V2, color=Class, shape = sex, size = genotype), label = colnames(assay(indata,assay_type))) + 
+  geom_point(size=1.5) + 
+  xlab("T-SNE 1") + 
+  ylab("T-SNE 2") + 
+  theme(plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("TSNE Plot") 
+
+plot(g)
+```
+
+#### UMAP {.tabset}
+```{r}
+assay_type = "log_cpm"
+
+set.seed(1)
+umap_out <- umap(t(assay(indata,assay_type)))
+
+embedding <- as.data.frame(umap_out$layout)
+embedding$Class <- as.factor(indata$tx)
+embedding$sex <- as.factor(indata$sex)
+embedding$genotype <- as.factor(indata$genotype)
+
+g <- ggplot(embedding, aes(x=V1, y=V2, color=Class, shape = sex, label = colnames(assay(indata,assay_type)))) + 
+  geom_point(size=1.5) + 
+  xlab("UMAP 1") + 
+  ylab("UMAP 2") + 
+  theme(plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("UMAP Plot")
+
+plot(g)
+```
+
+
+### Diffex {.tabset}
+#### J {.tabset}
+```{r}
+indata <- DRG_d7
+
+indata = indata[,colData(indata)$genotype == "J"]
+dim(indata)
+table(colData(indata)$genotype)
+
+# diffex model 
+designMat <- model.matrix(~factor(tx)+factor(sex), data=colData(indata))
+
+colnames(designMat)
+colnames(designMat) <- c("Intercept", "treatment","sex")
+
+head(designMat)
+
+fit <- lmFit(assay(indata, "log_cpm"), designMat)
+
+# Difference in expression 
+
+contrast.matrixNut<- makeContrasts(treatment, levels = designMat)
+fitNut <- contrasts.fit(fit,contrast.matrixNut)
+fitNut <- eBayes(fitNut)
+limmaResNut <- topTable(fitNut, adjust.method = "BH", n = Inf, sort.by = "P")
+
+
+dim(limmaResNut[limmaResNut$adj.P.Val <0.1,])
+table(colData(indata)$tx)
+
+new_hist_padjval_100breaks <- hist(limmaResNut$adj.P.Val, breaks=100)
+new_hist_pval_100breaks <- hist(limmaResNut$P.Value, breaks=100)
+##shows spike near 0
+
+sig_limmaResNut <- limmaResNut[limmaResNut$adj.P.Val <0.1,]
+sig_limmaResNut <- sig_limmaResNut[order(sig_limmaResNut$adj.P.Val),]
+
+
+sigp_limmaResNut <- limmaResNut[limmaResNut$P.Value <0.01,]
+sigp_limmaResNut <- sigp_limmaResNut[order(sigp_limmaResNut$P.Value),]
+
+
+#write.csv(sig_limmaResNut, "sig_TBgenes_padj.csv")
+
+top_500_genes <- limmaResNut[1:500,]
+top_1k_genes <- limmaResNut[1:1000,]
+
+```
+
+There are There are `r nrow(sig_limmaResNut)` genes with an FDR<0.1, and `r nrow(sigp_limmaResNut)` genes with p<0.01.  genes with an FDR<0.1, and `r nrow(sigp_limmaResNut)` genes with p<0.01. 
+
+
+##### Heatmap
+```{r }
+datatable(sig_limmaResNut, 
+          options=list(scrollX=T,pageLength=20),
+          rownames = T)
+
+## Make a Heatmap of all genes
+mat = as.matrix(assay(indata[row.names(top_500_genes),],"log_cpm"))
+mat = t(scale(t(mat)))
+#mat = mat[,order(colData(indata)$"tx")]
+
+df=data.frame(tx=colData(indata)$"tx", sex=colData(indata)$"sex", genotype=colData(indata)$"genotype") 
+
+
+#df=df[order(df$BMI),]
+
+#o1 = seriate(dist(mat), method = "TSP")
+#o2 = seriate(dist(t(mat)), method = "TSP")
+
+ha = HeatmapAnnotation(df = df, col = list(tx=c("PAC"="Red","VEH"="Blue")))
+
+Heatmap(mat,show_row_names=F,show_column_names = T, top_annotation = ha, cluster_columns = T )
+```
+
+#### N {.tabset}
+```{r}
+indata <- DRG_d7
+
+indata = indata[,colData(indata)$genotype == "N"]
+dim(indata)
+table(colData(indata)$genotype)
+
+# diffex model 
+designMat <- model.matrix(~factor(tx)+factor(sex), data=colData(indata))
+
+colnames(designMat)
+colnames(designMat) <- c("Intercept", "treatment", "sex")
+
+head(designMat)
+
+fit <- lmFit(assay(indata, "log_cpm"), designMat)
+
+# Difference in expression 
+
+contrast.matrixNut<- makeContrasts(treatment, levels = designMat)
+fitNut <- contrasts.fit(fit,contrast.matrixNut)
+fitNut <- eBayes(fitNut)
+limmaResNut <- topTable(fitNut, adjust.method = "BH", n = Inf, sort.by = "P")
+
+
+dim(limmaResNut[limmaResNut$adj.P.Val <0.1,])
+table(colData(indata)$tx)
+
+new_hist_padjval_100breaks <- hist(limmaResNut$adj.P.Val, breaks=100)
+new_hist_pval_100breaks <- hist(limmaResNut$P.Value, breaks=100)
+##shows spike near 0
+
+sig_limmaResNut <- limmaResNut[limmaResNut$adj.P.Val <0.1,]
+sig_limmaResNut <- sig_limmaResNut[order(sig_limmaResNut$adj.P.Val),]
+
+
+sigp_limmaResNut <- limmaResNut[limmaResNut$P.Value <0.01,]
+sigp_limmaResNut <- sigp_limmaResNut[order(sigp_limmaResNut$P.Value),]
+
+#write.csv(sig_limmaResNut, "sig_TBgenes_padj.csv")
+
+top_500_genes <- limmaResNut[1:500,]
+top_1k_genes <- limmaResNut[1:1000,]
+
+```
+
+There are There are `r nrow(sig_limmaResNut)` genes with an FDR<0.1, and `r nrow(sigp_limmaResNut)` genes with p<0.01.  significant genes. 
+
+
+##### Heatmap
+```{r }
+datatable(sig_limmaResNut, 
+          options=list(scrollX=T,pageLength=20),
+          rownames = T)
+
+## Make a Heatmap of all genes
+mat = as.matrix(assay(indata[row.names(top_500_genes),],"log_cpm"))
+mat = t(scale(t(mat)))
+#mat = mat[,order(colData(indata)$"tx")]
+
+df=data.frame(tx=colData(indata)$"tx", sex=colData(indata)$"sex", genotype=colData(indata)$"genotype") 
+
+#df=df[order(df$BMI),]
+
+#o1 = seriate(dist(mat), method = "TSP")
+#o2 = seriate(dist(t(mat)), method = "TSP")
+
+ha = HeatmapAnnotation(df = df, col = list(tx=c("PAC"="Red","VEH"="Blue")))
+
+Heatmap(mat,show_row_names=F,show_column_names = T, top_annotation = ha, cluster_columns = T )
+```
+
+#### males
+```{r}
+indata <- DRG_d7
+
+indata = indata[,colData(indata)$sex == "M"]
+dim(indata)
+table(colData(indata)$sex)
+
+# diffex model 
+designMat <- model.matrix(~factor(tx), data=colData(indata))
+
+colnames(designMat)
+colnames(designMat) <- c("Intercept", "treatment")
+
+head(designMat)
+
+fit <- lmFit(assay(indata, "log_cpm"), designMat)
+
+# Difference in expression 
+
+contrast.matrixNut<- makeContrasts(treatment, levels = designMat)
+fitNut <- contrasts.fit(fit,contrast.matrixNut)
+fitNut <- eBayes(fitNut)
+limmaResNut <- topTable(fitNut, adjust.method = "BH", n = Inf, sort.by = "P")
+
+
+dim(limmaResNut[limmaResNut$adj.P.Val <0.05,])
+table(colData(indata)$tx)
+
+new_hist_padjval_100breaks <- hist(limmaResNut$adj.P.Val, breaks=100)
+new_hist_pval_100breaks <- hist(limmaResNut$P.Value, breaks=100)
+##shows spike near 0
+
+sig_limmaResNut <- limmaResNut[limmaResNut$adj.P.Val <0.1,]
+sig_limmaResNut <- sig_limmaResNut[order(sig_limmaResNut$adj.P.Val),]
+
+sigp_limmaResNut <- limmaResNut[limmaResNut$P.Value <0.01,]
+sigp_limmaResNut <- sigp_limmaResNut[order(sigp_limmaResNut$P.Value),]
+
+#write.csv(sig_limmaResNut, "sig_TBgenes_padj.csv")
+
+top_500_genes <- limmaResNut[1:500,]
+top_1k_genes <- limmaResNut[1:1000,]
+
+```
+There are There are `r nrow(sig_limmaResNut)` genes with an FDR<0.1, and `r nrow(sigp_limmaResNut)` genes with p<0.01.  significant genes. 
+
+
+##### Heatmap
+```{r }
+datatable(sig_limmaResNut, 
+          options=list(scrollX=T,pageLength=20),
+          rownames = T)
+
+## Make a Heatmap of all genes
+mat = as.matrix(assay(indata[row.names(top_500_genes),],"log_cpm"))
+mat = t(scale(t(mat)))
+#mat = mat[,order(colData(indata)$"tx")]
+
+df=data.frame(tx=colData(indata)$"tx", sex=colData(indata)$"sex", genotype=colData(indata)$"genotype") 
+
+#df=df[order(df$BMI),]
+
+#o1 = seriate(dist(mat), method = "TSP")
+#o2 = seriate(dist(t(mat)), method = "TSP")
+
+ha = HeatmapAnnotation(df = df, col = list(tx=c("PAC"="Red","VEH"="Blue")))
+
+Heatmap(mat,show_row_names=F,show_column_names = T, top_annotation = ha, cluster_columns = T )
+```
+
+#### females {.tabset}
+```{r}
+indata <- DRG_d7
+
+indata = indata[,colData(indata)$sex == "F"]
+dim(indata)
+table(colData(indata)$sex)
+
+# diffex model 
+designMat <- model.matrix(~factor(tx), data=colData(indata))
+
+colnames(designMat)
+colnames(designMat) <- c("Intercept", "treatment")
+
+head(designMat)
+
+fit <- lmFit(assay(indata, "log_cpm"), designMat)
+
+# Difference in expression 
+
+contrast.matrixNut<- makeContrasts(treatment, levels = designMat)
+fitNut <- contrasts.fit(fit,contrast.matrixNut)
+fitNut <- eBayes(fitNut)
+limmaResNut <- topTable(fitNut, adjust.method = "BH", n = Inf, sort.by = "P")
+
+
+dim(limmaResNut[limmaResNut$adj.P.Val <0.05,])
+table(colData(indata)$tx)
+
+new_hist_padjval_100breaks <- hist(limmaResNut$adj.P.Val, breaks=100)
+new_hist_pval_100breaks <- hist(limmaResNut$P.Value, breaks=100)
+##shows spike near 0
+
+sig_limmaResNut <- limmaResNut[limmaResNut$adj.P.Val <0.1,]
+sig_limmaResNut <- sig_limmaResNut[order(sig_limmaResNut$adj.P.Val),]
+
+sigp_limmaResNut <- limmaResNut[limmaResNut$P.Value <0.01,]
+sigp_limmaResNut <- sigp_limmaResNut[order(sigp_limmaResNut$P.Value),]
+
+#write.csv(sig_limmaResNut, "sig_TBgenes_padj.csv")
+
+top_500_genes <- limmaResNut[1:500,]
+top_1k_genes <- limmaResNut[1:1000,]
+
+```
+There are There are `r nrow(sig_limmaResNut)` genes with an FDR<0.1, and `r nrow(sigp_limmaResNut)` genes with p<0.01.  significant genes. 
+
+
+##### Heatmap
+```{r }
+datatable(sig_limmaResNut, 
+          options=list(scrollX=T,pageLength=20),
+          rownames = T)
+
+## Make a Heatmap of all genes
+mat = as.matrix(assay(indata[row.names(top_500_genes),],"log_cpm"))
+mat = t(scale(t(mat)))
+#mat = mat[,order(colData(indata)$"tx")]
+
+df=data.frame(tx=colData(indata)$"tx", sex=colData(indata)$"sex", genotype=colData(indata)$"genotype") 
+
+#df=df[order(df$BMI),]
+
+#o1 = seriate(dist(mat), method = "TSP")
+#o2 = seriate(dist(t(mat)), method = "TSP")
+
+ha = HeatmapAnnotation(df = df, col = list(tx=c("PAC"="Red","VEH"="Blue")))
+
+Heatmap(mat,show_row_names=F,show_column_names = T, top_annotation = ha, cluster_columns = T )
+```
+
+#### both, Tx differences {.tabset}
+```{r}
+indata <- DRG_d7
+
+designMat <- model.matrix(~factor(tx)+factor(sex)  + factor(genotype), data=colData(indata))
+
+colnames(designMat)
+colnames(designMat) <- c("Intercept", "treatment","sex",  "genotype")
+
+head(designMat)
+
+fit <- lmFit(assay(indata, "log_cpm"), designMat)
+
+# Difference in expression 
+
+contrast.matrixNut<- makeContrasts(treatment, levels = designMat)
+fitNut <- contrasts.fit(fit,contrast.matrixNut)
+fitNut <- eBayes(fitNut)
+limmaResNut <- topTable(fitNut, adjust.method = "BH", n = Inf, sort.by = "P")
+
+
+dim(limmaResNut[limmaResNut$adj.P.Val <0.05,])
+table(colData(indata)$bmi_cat2)
+
+new_hist_padjval_100breaks <- hist(limmaResNut$adj.P.Val, breaks=100)
+new_hist_pval_100breaks <- hist(limmaResNut$P.Value, breaks=100)
+##shows spike near 0
+
+sig_limmaResNut <- limmaResNut[limmaResNut$adj.P.Val <0.1,]
+sig_limmaResNut <- sig_limmaResNut[order(sig_limmaResNut$adj.P.Val),]
+
+#write.csv(sig_limmaResNut, "sig_TBgenes_padj.csv")
+
+top_500_genes <- limmaResNut[1:500,]
+top_1k_genes <- limmaResNut[1:1000,]
+```
+##### Heatmap
+```{r }
+datatable(sig_limmaResNut, 
+          options=list(scrollX=T,pageLength=20),
+          rownames = T)
+
+## Make a Heatmap of all genes
+mat = as.matrix(assay(indata[row.names(top_500_genes),],"log_cpm"))
+mat = t(scale(t(mat)))
+#mat = mat[,order(colData(indata)$"tx")]
+
+df=data.frame(tx=colData(indata)$"tx", sex=colData(indata)$"sex", genotype=colData(indata)$"genotype") 
+
+ha = HeatmapAnnotation(df = df, col = list(tx=c("PAC"="Red","VEH"="Blue")))
+
+Heatmap(mat,show_row_names=F,show_column_names = T, top_annotation = ha, cluster_columns = T )
+```
+
+##### Pathways {.tabset}
+###### EnrichR
+```{r, eval=FALSE}
+
+# mouse-specific databases
+
+mouse_db <- c("WikiPathways_2019_Mouse", "Mouse_Gene_Atlas", "MGI_Mammalian_Phenotype_Level_4_2021", "MGI_Mammalian_Phenotype_Level_4_2019", "KEGG_2019_Mouse","Allen_Brain_Atlas_down", "Allen_Brain_Atlas_up")
+
+
+
+
+
+
+
+
+
+## get genesets from immunologic genesets 
+imm_genesets <- msigdb_gsets("Mus musculus", "C7", clean=TRUE)
+print(imm_genesets)
+
+h_genesets <- msigdb_gsets("Mus musculus", "H", clean=TRUE)
+print(h_genesets)
+
+celltype_genesets <- msigdb_gsets("Mus musculus", "C8", clean=TRUE)
+print(celltype_genesets)
+
+BIOCARTA <- msigdb_gsets(species="Mus musculus", category="C2", subcategory="CP:BIOCARTA")
+KEGG     <- msigdb_gsets(species="Mus musculus", category="C2", subcategory="CP:KEGG")
+REACTOME <- msigdb_gsets(species="Mus musculus", category="C2", subcategory="CP:REACTOME")
+
+
+chromosome1 <- msigdb_gsets(species="Mus musculus", category="C1", clean=TRUE)
+
+```
+
+###### Hallmark genesets
+```{r, eval=FALSE}
+
+genesets <- chromosome1
+
+genelist <- rownames(top_1k_genes)
+
+hyp_obj <- hypeR(genelist , genesets, test="hypergeometric", background=33772)
+
+hyp_dots(hyp_obj, merge=TRUE, fdr=0.5, title="Co-expression Modules")
+
+
+
+```
+
+###### celltype genesets
+###### BIOCARTA genesets
+###### KEGG genesets
+###### REACTOME genesets
+
+#### Genotype Diffex, by sex + genotype + tx {.tabset}
+```{r}
+indata <- DRG_d7
+
+designMat <- model.matrix(~factor(genotype)+ factor(tx) , data=colData(indata))#+factor(sex),"sex"
+
+colnames(designMat)
+colnames(designMat) <- c("Intercept", "genotype", "treatment")
+
+head(designMat)
+
+fit <- lmFit(assay(indata, "log_cpm"), designMat)
+
+# Difference in expression 
+
+contrast.matrixNut <- makeContrasts(genotype-treatment, levels = designMat)
+fitNut <- contrasts.fit(fit,contrast.matrixNut)
+fitNut <- eBayes(fitNut)
+limmaResNut <- topTable(fitNut, adjust.method = "BH", n = Inf, sort.by = "P")
+
+
+dim(limmaResNut[limmaResNut$adj.P.Val <0.4,])
+#table(colData(indata)$bmi_cat2)
+
+new_hist_padjval_100breaks <- hist(limmaResNut$adj.P.Val, breaks=100)
+new_hist_pval_100breaks <- hist(limmaResNut$P.Value, breaks=100)
+##shows spike near 0
+
+## for IPA
+#ipa_d7DRG <- limmaResNut[limmaResNut$adj.P.Val <0.4,]
+#write.csv(ipa_d7DRG, "ipa_d7DRG.csv")
+
+sig_limmaResNut <- limmaResNut[limmaResNut$adj.P.Val <0.1,]
+sig_limmaResNut <- sig_limmaResNut[order(sig_limmaResNut$adj.P.Val),]
+
+#write.csv(sig_limmaResNut, "sig_TBgenes_padj.csv")
+
+top_500_genes <- limmaResNut[1:500,]
+top_1k_genes <- limmaResNut[1:1000,]
+
+
+results <- decideTests(fitNut)
+vennDiagram(results)
+
+```
+##### Heatmap
+```{r }
+datatable(sig_limmaResNut, 
+          options=list(scrollX=T,pageLength=20),
+          rownames = T)
+
+## Make a Heatmap of all genes
+mat = as.matrix(assay(indata[row.names(top_500_genes),],"log_cpm"))
+mat = t(scale(t(mat)))
+#mat = mat[,order(colData(indata)$"tx")]
+
+df=data.frame(tx=colData(indata)$"tx", sex=colData(indata)$"sex", genotype=colData(indata)$"genotype") 
+
+ha = HeatmapAnnotation(df = df, col = list(tx=c("PAC"="Red","VEH"="Blue")))
+
+Heatmap(mat,show_row_names=F,show_column_names = T, top_annotation = ha, cluster_columns = T )
+```
+
+
+#### Tx diffex, VEH {.tabset}
+```{r}
+indata <- DRG_d7
+
+indata = indata[,colData(indata)$tx == "VEH"]
+dim(indata)
+table(colData(indata)$tx)
+
+designMat <- model.matrix(~factor(genotype) + factor(sex) , data=colData(indata))#+factor(sex),"sex"
+
+colnames(designMat)
+colnames(designMat) <- c("Intercept", "genotype", "sex")
+
+head(designMat)
+
+fit <- lmFit(assay(indata, "log_cpm"), designMat)
+
+# Difference in expression 
+
+contrast.matrixNut <- makeContrasts(genotype, levels = designMat)
+fitNut <- contrasts.fit(fit,contrast.matrixNut)
+fitNut <- eBayes(fitNut)
+limmaResNut <- topTable(fitNut, adjust.method = "BH", n = Inf, sort.by = "P")
+
+
+dim(limmaResNut[limmaResNut$adj.P.Val <0.4,])
+#table(colData(indata)$bmi_cat2)
+
+new_hist_padjval_100breaks <- hist(limmaResNut$adj.P.Val, breaks=100)
+new_hist_pval_100breaks <- hist(limmaResNut$P.Value, breaks=100)
+##shows spike near 0
+
+## for IPA
+#ipa_d7DRG <- limmaResNut[limmaResNut$adj.P.Val <0.4,]
+#write.csv(ipa_d7DRG, "ipa_d7DRG.csv")
+
+sig_limmaResNut <- limmaResNut[limmaResNut$adj.P.Val <0.1,]
+sig_limmaResNut <- sig_limmaResNut[order(sig_limmaResNut$adj.P.Val),]
+
+#write.csv(sig_limmaResNut, "sig_TBgenes_padj.csv")
+
+top_500_genes <- limmaResNut[1:500,]
+top_1k_genes <- limmaResNut[1:1000,]
+
+
+results <- decideTests(fitNut)
+vennDiagram(results)
+
+```
+##### Heatmap
+```{r }
+datatable(sig_limmaResNut, 
+          options=list(scrollX=T,pageLength=20),
+          rownames = T)
+
+## Make a Heatmap of all genes
+mat = as.matrix(assay(indata[row.names(top_500_genes),],"log_cpm"))
+mat = t(scale(t(mat)))
+#mat = mat[,order(colData(indata)$"tx")]
+
+df=data.frame(tx=colData(indata)$"tx", sex=colData(indata)$"sex", genotype=colData(indata)$"genotype") 
+
+ha = HeatmapAnnotation(df = df, col = list(tx=c("PAC"="Red","VEH"="Blue")))
+
+Heatmap(mat,show_row_names=F,show_column_names = T, top_annotation = ha, cluster_columns = T )
+```
+
+
+## D7 PAG {.tabset}
+### Dimension Reduction {.tabset}
+#### PCA {.tabset}
+```{r}
+indata <- PAG_d7
+
+indata_tmp <- SummarizedExperiment(assays=list(counts=assays(indata)$log_cpm),
+                     colData = colData(indata))
+
+plotPCA(DESeqTransform(indata_tmp), intgroup = c("tx",  "sex"))
+
+
+```
+```{r}
+plotPCA(DESeqTransform(indata_tmp), intgroup = c("tx",  "genotype"))
+
+```
+
+#### tSNE {.tabset}
+```{r}
+assay_type = "log_cpm"
+
+set.seed(1)
+tsne_out <- Rtsne(t(assay(indata,assay_type)), check_duplicates = FALSE, pca = TRUE, perplexity=5, theta=0.5, dims=2) # why does it say perplexity is too large? Changed from 10 to 5
+
+embedding <- as.data.frame(tsne_out$Y)
+embedding$Class <- (indata$tx )
+embedding$sex <- indata$sex
+embedding$genotype <- indata$genotype
+
+
+g <- ggplot(embedding, 
+            aes(x=V1, y=V2, color=Class, shape = sex, size = genotype), label = colnames(assay(indata,assay_type))) + 
+  geom_point(size=1.5) + 
+  xlab("T-SNE 1") + 
+  ylab("T-SNE 2") + 
+  theme(plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("TSNE Plot") 
+
+plot(g)
+```
+
+#### UMAP {.tabset}
+```{r}
+assay_type = "log_cpm"
+
+set.seed(1)
+umap_out <- umap(t(assay(indata,assay_type)))
+
+embedding <- as.data.frame(umap_out$layout)
+embedding$Class <- as.factor(indata$tx)
+embedding$sex <- as.factor(indata$sex)
+embedding$genotype <- as.factor(indata$genotype)
+
+g <- ggplot(embedding, aes(x=V1, y=V2, color=Class, shape = sex, label = colnames(assay(indata,assay_type)))) + 
+  geom_point(size=1.5) + 
+  xlab("UMAP 1") + 
+  ylab("UMAP 2") + 
+  theme(plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("UMAP Plot")
+
+plot(g)
+```
+
+
+### Diffex {.tabset}
+
+#### J {.tabset}
+```{r}
+indata <- PAG_d7
+
+indata = indata[,colData(indata)$genotype == "J"]
+dim(indata)
+table(colData(indata)$genotype)
+
+# diffex model 
+designMat <- model.matrix(~factor(tx), data=colData(indata))
+
+colnames(designMat)
+colnames(designMat) <- c("Intercept", "treatment")
+
+head(designMat)
+
+fit <- lmFit(assay(indata, "log_cpm"), designMat)
+
+# Difference in expression 
+
+contrast.matrixNut<- makeContrasts(treatment, levels = designMat)
+fitNut <- contrasts.fit(fit,contrast.matrixNut)
+fitNut <- eBayes(fitNut)
+limmaResNut <- topTable(fitNut, adjust.method = "BH", n = Inf, sort.by = "P")
+
+
+dim(limmaResNut[limmaResNut$adj.P.Val <0.05,])
+table(colData(indata)$tx)
+
+new_hist_padjval_100breaks <- hist(limmaResNut$adj.P.Val, breaks=100)
+new_hist_pval_100breaks <- hist(limmaResNut$P.Value, breaks=100)
+##shows spike near 0
+
+sig_limmaResNut <- limmaResNut[limmaResNut$adj.P.Val <0.1,]
+sig_limmaResNut <- sig_limmaResNut[order(sig_limmaResNut$adj.P.Val),]
+
+sigp_limmaResNut <- limmaResNut[limmaResNut$P.Value <0.01,]
+sigp_limmaResNut <- sigp_limmaResNut[order(sigp_limmaResNut$P.Value),]
+
+#write.csv(sig_limmaResNut, "sig_TBgenes_padj.csv")
+
+top_500_genes <- limmaResNut[1:500,]
+top_1k_genes <- limmaResNut[1:1000,]
+
+```
+
+There are There are `r nrow(sig_limmaResNut)` genes with an FDR<0.1, and `r nrow(sigp_limmaResNut)` genes with p<0.01.  significant genes. 
+
+
+##### Heatmap
+```{r }
+datatable(sig_limmaResNut, 
+          options=list(scrollX=T,pageLength=20),
+          rownames = T)
+
+## Make a Heatmap of all genes
+mat = as.matrix(assay(indata[row.names(top_500_genes),],"log_cpm"))
+mat = t(scale(t(mat)))
+#mat = mat[,order(colData(indata)$"tx")]
+
+df=data.frame(tx=colData(indata)$"tx", sex=colData(indata)$"sex", genotype=colData(indata)$"genotype") 
+
+#df=df[order(df$BMI),]
+
+#o1 = seriate(dist(mat), method = "TSP")
+#o2 = seriate(dist(t(mat)), method = "TSP")
+
+ha = HeatmapAnnotation(df = df, col = list(tx=c("PAC"="Red","VEH"="Blue")))
+
+Heatmap(mat,show_row_names=F,show_column_names = T, top_annotation = ha, cluster_columns = T )
+```
+
+#### N {.tabset}
+```{r}
+indata <- PAG_d7
+
+indata = indata[,colData(indata)$genotype == "N"]
+dim(indata)
+table(colData(indata)$genotype)
+
+# diffex model 
+designMat <- model.matrix(~factor(tx), data=colData(indata))
+
+colnames(designMat)
+colnames(designMat) <- c("Intercept", "treatment")
+
+head(designMat)
+
+fit <- lmFit(assay(indata, "log_cpm"), designMat)
+
+# Difference in expression 
+
+contrast.matrixNut<- makeContrasts(treatment, levels = designMat)
+fitNut <- contrasts.fit(fit,contrast.matrixNut)
+fitNut <- eBayes(fitNut)
+limmaResNut <- topTable(fitNut, adjust.method = "BH", n = Inf, sort.by = "P")
+
+
+dim(limmaResNut[limmaResNut$adj.P.Val <0.05,])
+table(colData(indata)$tx)
+
+new_hist_padjval_100breaks <- hist(limmaResNut$adj.P.Val, breaks=100)
+new_hist_pval_100breaks <- hist(limmaResNut$P.Value, breaks=100)
+##shows spike near 0
+
+sig_limmaResNut <- limmaResNut[limmaResNut$adj.P.Val <0.1,]
+sig_limmaResNut <- sig_limmaResNut[order(sig_limmaResNut$adj.P.Val),]
+
+sigp_limmaResNut <- limmaResNut[limmaResNut$P.Value <0.01,]
+sigp_limmaResNut <- sigp_limmaResNut[order(sigp_limmaResNut$P.Value),]
+
+#write.csv(sig_limmaResNut, "sig_TBgenes_padj.csv")
+
+top_500_genes <- limmaResNut[1:500,]
+top_1k_genes <- limmaResNut[1:1000,]
+
+```
+
+There are There are `r nrow(sig_limmaResNut)` genes with an FDR<0.1, and `r nrow(sigp_limmaResNut)` genes with p<0.01.  significant genes. 
+
+
+##### Heatmap
+```{r }
+datatable(sig_limmaResNut, 
+          options=list(scrollX=T,pageLength=20),
+          rownames = T)
+
+## Make a Heatmap of all genes
+mat = as.matrix(assay(indata[row.names(top_500_genes),],"log_cpm"))
+mat = t(scale(t(mat)))
+#mat = mat[,order(colData(indata)$"tx")]
+
+df=data.frame(tx=colData(indata)$"tx", sex=colData(indata)$"sex", genotype=colData(indata)$"genotype") 
+
+#df=df[order(df$BMI),]
+
+#o1 = seriate(dist(mat), method = "TSP")
+#o2 = seriate(dist(t(mat)), method = "TSP")
+
+ha = HeatmapAnnotation(df = df, col = list(tx=c("PAC"="Red","VEH"="Blue")))
+
+Heatmap(mat,show_row_names=F,show_column_names = T, top_annotation = ha, cluster_columns = T )
+```
+
+#### males
+```{r}
+indata <- PAG_d7
+
+indata = indata[,colData(indata)$sex == "M"]
+dim(indata)
+table(colData(indata)$sex)
+
+# diffex model 
+designMat <- model.matrix(~factor(tx), data=colData(indata))
+
+colnames(designMat)
+colnames(designMat) <- c("Intercept", "treatment")
+
+head(designMat)
+
+fit <- lmFit(assay(indata, "log_cpm"), designMat)
+
+# Difference in expression 
+
+contrast.matrixNut<- makeContrasts(treatment, levels = designMat)
+fitNut <- contrasts.fit(fit,contrast.matrixNut)
+fitNut <- eBayes(fitNut)
+limmaResNut <- topTable(fitNut, adjust.method = "BH", n = Inf, sort.by = "P")
+
+
+dim(limmaResNut[limmaResNut$adj.P.Val <0.05,])
+table(colData(indata)$tx)
+
+new_hist_padjval_100breaks <- hist(limmaResNut$adj.P.Val, breaks=100)
+new_hist_pval_100breaks <- hist(limmaResNut$P.Value, breaks=100)
+##shows spike near 0
+
+sig_limmaResNut <- limmaResNut[limmaResNut$adj.P.Val <0.1,]
+sig_limmaResNut <- sig_limmaResNut[order(sig_limmaResNut$adj.P.Val),]
+
+sigp_limmaResNut <- limmaResNut[limmaResNut$P.Value <0.01,]
+sigp_limmaResNut <- sigp_limmaResNut[order(sigp_limmaResNut$P.Value),]
+
+#write.csv(sig_limmaResNut, "sig_TBgenes_padj.csv")
+
+top_500_genes <- limmaResNut[1:500,]
+top_1k_genes <- limmaResNut[1:1000,]
+
+```
+There are There are `r nrow(sig_limmaResNut)` genes with an FDR<0.1, and `r nrow(sigp_limmaResNut)` genes with p<0.01.  significant genes. 
+
+
+##### Heatmap
+```{r }
+datatable(sig_limmaResNut, 
+          options=list(scrollX=T,pageLength=20),
+          rownames = T)
+
+## Make a Heatmap of all genes
+mat = as.matrix(assay(indata[row.names(top_500_genes),],"log_cpm"))
+mat = t(scale(t(mat)))
+#mat = mat[,order(colData(indata)$"tx")]
+
+df=data.frame(tx=colData(indata)$"tx", sex=colData(indata)$"sex", genotype=colData(indata)$"genotype") 
+
+#df=df[order(df$BMI),]
+
+#o1 = seriate(dist(mat), method = "TSP")
+#o2 = seriate(dist(t(mat)), method = "TSP")
+
+ha = HeatmapAnnotation(df = df, col = list(tx=c("PAC"="Red","VEH"="Blue")))
+
+Heatmap(mat,show_row_names=F,show_column_names = T, top_annotation = ha, cluster_columns = T )
+```
+
+#### females {.tabset}
+```{r}
+indata <- PAG_d7
+
+indata = indata[,colData(indata)$sex == "F"]
+dim(indata)
+table(colData(indata)$sex)
+
+# diffex model 
+designMat <- model.matrix(~factor(tx), data=colData(indata))
+
+colnames(designMat)
+colnames(designMat) <- c("Intercept", "treatment")
+
+head(designMat)
+
+fit <- lmFit(assay(indata, "log_cpm"), designMat)
+
+# Difference in expression 
+
+contrast.matrixNut<- makeContrasts(treatment, levels = designMat)
+fitNut <- contrasts.fit(fit,contrast.matrixNut)
+fitNut <- eBayes(fitNut)
+limmaResNut <- topTable(fitNut, adjust.method = "BH", n = Inf, sort.by = "P")
+
+
+dim(limmaResNut[limmaResNut$adj.P.Val <0.05,])
+table(colData(indata)$tx)
+
+new_hist_padjval_100breaks <- hist(limmaResNut$adj.P.Val, breaks=100)
+new_hist_pval_100breaks <- hist(limmaResNut$P.Value, breaks=100)
+##shows spike near 0
+
+sig_limmaResNut <- limmaResNut[limmaResNut$adj.P.Val <0.1,]
+sig_limmaResNut <- sig_limmaResNut[order(sig_limmaResNut$adj.P.Val),]
+
+sigp_limmaResNut <- limmaResNut[limmaResNut$P.Value <0.01,]
+sigp_limmaResNut <- sigp_limmaResNut[order(sigp_limmaResNut$P.Value),]
+
+#write.csv(sig_limmaResNut, "sig_TBgenes_padj.csv")
+
+top_500_genes <- limmaResNut[1:500,]
+top_1k_genes <- limmaResNut[1:1000,]
+
+```
+There are There are `r nrow(sig_limmaResNut)` genes with an FDR<0.1, and `r nrow(sigp_limmaResNut)` genes with p<0.01.  significant genes. 
+
+
+##### Heatmap
+```{r }
+datatable(sig_limmaResNut, 
+          options=list(scrollX=T,pageLength=20),
+          rownames = T)
+
+## Make a Heatmap of all genes
+mat = as.matrix(assay(indata[row.names(top_500_genes),],"log_cpm"))
+mat = t(scale(t(mat)))
+#mat = mat[,order(colData(indata)$"tx")]
+
+df=data.frame(tx=colData(indata)$"tx", sex=colData(indata)$"sex", genotype=colData(indata)$"genotype") 
+
+#df=df[order(df$BMI),]
+
+#o1 = seriate(dist(mat), method = "TSP")
+#o2 = seriate(dist(t(mat)), method = "TSP")
+
+ha = HeatmapAnnotation(df = df, col = list(tx=c("PAC"="Red","VEH"="Blue")))
+
+Heatmap(mat,show_row_names=F,show_column_names = T, top_annotation = ha, cluster_columns = T )
+```
+
+#### both {.tabset}
+```{r}
+indata <- PAG_d7
+
+designMat <- model.matrix(~factor(tx)+factor(sex)  + factor(genotype), data=colData(indata))
+
+colnames(designMat)
+colnames(designMat) <- c("Intercept", "treatment","sex",  "genotype")
+
+head(designMat)
+
+fit <- lmFit(assay(indata, "log_cpm"), designMat)
+
+# Difference in expression 
+
+contrast.matrixNut<- makeContrasts(treatment, levels = designMat)
+fitNut <- contrasts.fit(fit,contrast.matrixNut)
+fitNut <- eBayes(fitNut)
+limmaResNut <- topTable(fitNut, adjust.method = "BH", n = Inf, sort.by = "P")
+
+
+dim(limmaResNut[limmaResNut$adj.P.Val <0.05,])
+table(colData(indata)$bmi_cat2)
+
+new_hist_padjval_100breaks <- hist(limmaResNut$adj.P.Val, breaks=100)
+new_hist_pval_100breaks <- hist(limmaResNut$P.Value, breaks=100)
+##shows spike near 0
+
+sig_limmaResNut <- limmaResNut[limmaResNut$adj.P.Val <0.1,]
+sig_limmaResNut <- sig_limmaResNut[order(sig_limmaResNut$adj.P.Val),]
+
+#write.csv(sig_limmaResNut, "sig_TBgenes_padj.csv")
+
+top_500_genes <- limmaResNut[1:500,]
+top_1k_genes <- limmaResNut[1:1000,]
+```
+##### Heatmap
+```{r }
+datatable(sig_limmaResNut, 
+          options=list(scrollX=T,pageLength=20),
+          rownames = T)
+
+## Make a Heatmap of all genes
+mat = as.matrix(assay(indata[row.names(top_500_genes),],"log_cpm"))
+mat = t(scale(t(mat)))
+#mat = mat[,order(colData(indata)$"tx")]
+
+df=data.frame(tx=colData(indata)$"tx", sex=colData(indata)$"sex", genotype=colData(indata)$"genotype") 
+
+ha = HeatmapAnnotation(df = df, col = list(tx=c("PAC"="Red","VEH"="Blue")))
+
+Heatmap(mat,show_row_names=F,show_column_names = T, top_annotation = ha, cluster_columns = T )
+```
+
+
+
+
+#### Tx diffex, VEH {.tabset}
+```{r}
+indata <- PAG_d7
+
+indata = indata[,colData(indata)$tx == "VEH"]
+dim(indata)
+table(colData(indata)$tx)
+
+designMat <- model.matrix(~factor(genotype) + factor(sex) , data=colData(indata))#+factor(sex),"sex"
+
+colnames(designMat)
+colnames(designMat) <- c("Intercept", "genotype", "sex")
+
+head(designMat)
+
+fit <- lmFit(assay(indata, "log_cpm"), designMat)
+
+# Difference in expression 
+
+contrast.matrixNut <- makeContrasts(genotype, levels = designMat)
+fitNut <- contrasts.fit(fit,contrast.matrixNut)
+fitNut <- eBayes(fitNut)
+limmaResNut <- topTable(fitNut, adjust.method = "BH", n = Inf, sort.by = "P")
+
+
+dim(limmaResNut[limmaResNut$adj.P.Val <0.4,])
+#table(colData(indata)$bmi_cat2)
+
+new_hist_padjval_100breaks <- hist(limmaResNut$adj.P.Val, breaks=100)
+new_hist_pval_100breaks <- hist(limmaResNut$P.Value, breaks=100)
+##shows spike near 0
+
+## for IPA
+#ipa_d7DRG <- limmaResNut[limmaResNut$adj.P.Val <0.4,]
+#write.csv(ipa_d7DRG, "ipa_d7DRG.csv")
+
+sig_limmaResNut <- limmaResNut[limmaResNut$adj.P.Val <0.1,]
+sig_limmaResNut <- sig_limmaResNut[order(sig_limmaResNut$adj.P.Val),]
+
+#write.csv(sig_limmaResNut, "sig_TBgenes_padj.csv")
+
+top_500_genes <- limmaResNut[1:500,]
+top_1k_genes <- limmaResNut[1:1000,]
+
+
+results <- decideTests(fitNut)
+vennDiagram(results)
+
+```
+##### Heatmap
+```{r }
+datatable(sig_limmaResNut, 
+          options=list(scrollX=T,pageLength=20),
+          rownames = T)
+
+## Make a Heatmap of all genes
+mat = as.matrix(assay(indata[row.names(top_500_genes),],"log_cpm"))
+mat = t(scale(t(mat)))
+#mat = mat[,order(colData(indata)$"tx")]
+
+df=data.frame(tx=colData(indata)$"tx", sex=colData(indata)$"sex", genotype=colData(indata)$"genotype") 
+
+ha = HeatmapAnnotation(df = df, col = list(tx=c("PAC"="Red","VEH"="Blue")))
+
+Heatmap(mat,show_row_names=F,show_column_names = T, top_annotation = ha, cluster_columns = T )
+```
+#### Tx diffex, PAC {.tabset}
+```{r}
+indata <- PAG_d7
+
+indata = indata[,colData(indata)$tx == "PAC"]
+dim(indata)
+table(colData(indata)$tx)
+
+designMat <- model.matrix(~factor(genotype) + factor(sex) , data=colData(indata))#+factor(sex),"sex"
+
+colnames(designMat)
+colnames(designMat) <- c("Intercept", "genotype", "sex")
+
+head(designMat)
+
+fit <- lmFit(assay(indata, "log_cpm"), designMat)
+
+# Difference in expression 
+
+contrast.matrixNut <- makeContrasts(genotype, levels = designMat)
+fitNut <- contrasts.fit(fit,contrast.matrixNut)
+fitNut <- eBayes(fitNut)
+limmaResNut <- topTable(fitNut, adjust.method = "BH", n = Inf, sort.by = "P")
+
+
+dim(limmaResNut[limmaResNut$adj.P.Val <0.4,])
+#table(colData(indata)$bmi_cat2)
+
+new_hist_padjval_100breaks <- hist(limmaResNut$adj.P.Val, breaks=100)
+new_hist_pval_100breaks <- hist(limmaResNut$P.Value, breaks=100)
+##shows spike near 0
+
+## for IPA
+#ipa_d7DRG <- limmaResNut[limmaResNut$adj.P.Val <0.4,]
+#write.csv(ipa_d7DRG, "ipa_d7DRG.csv")
+
+sig_limmaResNut <- limmaResNut[limmaResNut$adj.P.Val <0.1,]
+sig_limmaResNut <- sig_limmaResNut[order(sig_limmaResNut$adj.P.Val),]
+
+#write.csv(sig_limmaResNut, "sig_TBgenes_padj.csv")
+
+top_500_genes <- limmaResNut[1:500,]
+top_1k_genes <- limmaResNut[1:1000,]
+
+
+results <- decideTests(fitNut)
+vennDiagram(results)
+
+```
+##### Heatmap
+```{r }
+datatable(sig_limmaResNut, 
+          options=list(scrollX=T,pageLength=20),
+          rownames = T)
+
+## Make a Heatmap of all genes
+mat = as.matrix(assay(indata[row.names(top_500_genes),],"log_cpm"))
+mat = t(scale(t(mat)))
+#mat = mat[,order(colData(indata)$"tx")]
+
+df=data.frame(tx=colData(indata)$"tx", sex=colData(indata)$"sex", genotype=colData(indata)$"genotype") 
+
+ha = HeatmapAnnotation(df = df, col = list(tx=c("PAC"="Red","VEH"="Blue")))
+
+Heatmap(mat,show_row_names=F,show_column_names = T, top_annotation = ha, cluster_columns = T )
+```
+
+##### Pathways {.tabset}
+###### EnrichR
+```{r, eval=FALSE}
+
+# mouse-specific databases
+
+mouse_db <- c("WikiPathways_2019_Mouse", "Mouse_Gene_Atlas", "MGI_Mammalian_Phenotype_Level_4_2021", "MGI_Mammalian_Phenotype_Level_4_2019", "KEGG_2019_Mouse","Allen_Brain_Atlas_down", "Allen_Brain_Atlas_up")
+
+
+
+
+
+
+
+
+
+## get genesets from immunologic genesets 
+imm_genesets <- msigdb_gsets("Mus musculus", "C7", clean=TRUE)
+print(imm_genesets)
+
+h_genesets <- msigdb_gsets("Mus musculus", "H", clean=TRUE)
+print(h_genesets)
+
+celltype_genesets <- msigdb_gsets("Mus musculus", "C8", clean=TRUE)
+print(celltype_genesets)
+
+BIOCARTA <- msigdb_gsets(species="Mus musculus", category="C2", subcategory="CP:BIOCARTA")
+KEGG     <- msigdb_gsets(species="Mus musculus", category="C2", subcategory="CP:KEGG")
+REACTOME <- msigdb_gsets(species="Mus musculus", category="C2", subcategory="CP:REACTOME")
+
+
+chromosome1 <- msigdb_gsets(species="Mus musculus", category="C1", clean=TRUE)
+
+```
+
+###### Hallmark genesets
+```{r, eval=FALSE}
+
+genesets <- chromosome1
+
+genelist <- rownames(top_1k_genes)
+
+hyp_obj <- hypeR(genelist , genesets, test="hypergeometric", background=33772)
+
+hyp_dots(hyp_obj, merge=TRUE, fdr=0.5, title="Co-expression Modules")
+
+
+
+```
+
+###### celltype genesets
+###### BIOCARTA genesets
+###### KEGG genesets
+###### REACTOME genesets
+
+
+
+
+
+
+##### Pathways {.tabset}
+###### EnrichR
+```{r, eval=FALSE}
+
+# mouse-specific databases
+
+mouse_db <- c("WikiPathways_2019_Mouse", "Mouse_Gene_Atlas", "MGI_Mammalian_Phenotype_Level_4_2021", "MGI_Mammalian_Phenotype_Level_4_2019", "KEGG_2019_Mouse","Allen_Brain_Atlas_down", "Allen_Brain_Atlas_up")
+
+
+
+
+
+
+
+
+
+## get genesets from immunologic genesets 
+imm_genesets <- msigdb_gsets("Mus musculus", "C7", clean=TRUE)
+print(imm_genesets)
+
+h_genesets <- msigdb_gsets("Mus musculus", "H", clean=TRUE)
+print(h_genesets)
+
+celltype_genesets <- msigdb_gsets("Mus musculus", "C8", clean=TRUE)
+print(celltype_genesets)
+
+BIOCARTA <- msigdb_gsets(species="Mus musculus", category="C2", subcategory="CP:BIOCARTA")
+KEGG     <- msigdb_gsets(species="Mus musculus", category="C2", subcategory="CP:KEGG")
+REACTOME <- msigdb_gsets(species="Mus musculus", category="C2", subcategory="CP:REACTOME")
+
+
+chromosome1 <- msigdb_gsets(species="Mus musculus", category="C1", clean=TRUE)
+
+```
+
+###### Hallmark genesets
+```{r, eval=FALSE}
+
+genesets <- chromosome1
+
+genelist <- rownames(top_1k_genes)
+
+hyp_obj <- hypeR(genelist , genesets, test="hypergeometric", background=33772)
+
+hyp_dots(hyp_obj, merge=TRUE, fdr=0.5, title="Co-expression Modules")
+
+
+
+```
+
+###### celltype genesets
+###### BIOCARTA genesets
+###### KEGG genesets
+###### REACTOME genesets
+
+
+
+
+
+
+## D7 Spinal Chord {.tabset}
+### Dimension Reduction {.tabset}
+#### PCA {.tabset}
+```{r}
+indata <- spinal_chord_d7
+
+indata_tmp <- SummarizedExperiment(assays=list(counts=assays(indata)$log_cpm),
+                     colData = colData(indata))
+
+plotPCA(DESeqTransform(indata_tmp), intgroup = c("tx",  "sex"))
+
+
+```
+```{r}
+plotPCA(DESeqTransform(indata_tmp), intgroup = c("tx",  "genotype"))
+
+```
+
+#### tSNE {.tabset}
+```{r}
+assay_type = "log_cpm"
+
+set.seed(1)
+tsne_out <- Rtsne(t(assay(indata,assay_type)), check_duplicates = FALSE, pca = TRUE, perplexity=5, theta=0.5, dims=2) # why does it say perplexity is too large? Changed from 10 to 5
+
+embedding <- as.data.frame(tsne_out$Y)
+embedding$Class <- (indata$tx )
+embedding$sex <- indata$sex
+embedding$genotype <- indata$genotype
+
+
+g <- ggplot(embedding, 
+            aes(x=V1, y=V2, color=Class, shape = sex, size = genotype), label = colnames(assay(indata,assay_type))) + 
+  geom_point(size=1.5) + 
+  xlab("T-SNE 1") + 
+  ylab("T-SNE 2") + 
+  theme(plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("TSNE Plot") 
+
+plot(g)
+```
+
+#### UMAP {.tabset}
+```{r}
+assay_type = "log_cpm"
+
+set.seed(1)
+umap_out <- umap(t(assay(indata,assay_type)))
+
+embedding <- as.data.frame(umap_out$layout)
+embedding$Class <- as.factor(indata$tx)
+embedding$sex <- as.factor(indata$sex)
+embedding$genotype <- as.factor(indata$genotype)
+
+g <- ggplot(embedding, aes(x=V1, y=V2, color=Class, shape = sex, label = colnames(assay(indata,assay_type)))) + 
+  geom_point(size=1.5) + 
+  xlab("UMAP 1") + 
+  ylab("UMAP 2") + 
+  theme(plot.title = element_text(hjust = 0.5)) + 
+  ggtitle("UMAP Plot")
+
+plot(g)
+```
+
+
+### Diffex {.tabset}
+#### J {.tabset}
+```{r}
+indata <- spinal_chord_d7
+
+indata = indata[,colData(indata)$genotype == "J"]
+dim(indata)
+table(colData(indata)$genotype)
+
+# diffex model 
+designMat <- model.matrix(~factor(tx), data=colData(indata))
+
+colnames(designMat)
+colnames(designMat) <- c("Intercept", "treatment")
+
+head(designMat)
+
+fit <- lmFit(assay(indata, "log_cpm"), designMat)
+
+# Difference in expression 
+
+contrast.matrixNut<- makeContrasts(treatment, levels = designMat)
+fitNut <- contrasts.fit(fit,contrast.matrixNut)
+fitNut <- eBayes(fitNut)
+limmaResNut <- topTable(fitNut, adjust.method = "BH", n = Inf, sort.by = "P")
+
+
+dim(limmaResNut[limmaResNut$adj.P.Val <0.05,])
+table(colData(indata)$tx)
+
+new_hist_padjval_100breaks <- hist(limmaResNut$adj.P.Val, breaks=100)
+new_hist_pval_100breaks <- hist(limmaResNut$P.Value, breaks=100)
+##shows spike near 0
+
+sig_limmaResNut <- limmaResNut[limmaResNut$adj.P.Val <0.1,]
+sig_limmaResNut <- sig_limmaResNut[order(sig_limmaResNut$adj.P.Val),]
+
+sigp_limmaResNut <- limmaResNut[limmaResNut$P.Value <0.01,]
+sigp_limmaResNut <- sigp_limmaResNut[order(sigp_limmaResNut$P.Value),]
+
+#write.csv(sig_limmaResNut, "sig_TBgenes_padj.csv")
+
+top_500_genes <- limmaResNut[1:500,]
+top_1k_genes <- limmaResNut[1:1000,]
+
+```
+
+There are There are `r nrow(sig_limmaResNut)` genes with an FDR<0.1, and `r nrow(sigp_limmaResNut)` genes with p<0.01.  significant genes. 
+
+
+##### Heatmap
+```{r }
+datatable(sig_limmaResNut, 
+          options=list(scrollX=T,pageLength=20),
+          rownames = T)
+
+## Make a Heatmap of all genes
+mat = as.matrix(assay(indata[row.names(top_500_genes),],"log_cpm"))
+mat = t(scale(t(mat)))
+#mat = mat[,order(colData(indata)$"tx")]
+
+df=data.frame(tx=colData(indata)$"tx", sex=colData(indata)$"sex", genotype=colData(indata)$"genotype") 
+
+#df=df[order(df$BMI),]
+
+#o1 = seriate(dist(mat), method = "TSP")
+#o2 = seriate(dist(t(mat)), method = "TSP")
+
+ha = HeatmapAnnotation(df = df, col = list(tx=c("PAC"="Red","VEH"="Blue")))
+
+Heatmap(mat,show_row_names=F,show_column_names = T, top_annotation = ha, cluster_columns = T )
+```
+
+#### N {.tabset}
+```{r}
+indata <- spinal_chord_d7
+
+indata = indata[,colData(indata)$genotype == "N"]
+dim(indata)
+table(colData(indata)$genotype)
+
+# diffex model 
+designMat <- model.matrix(~factor(tx), data=colData(indata))
+
+colnames(designMat)
+colnames(designMat) <- c("Intercept", "treatment")
+
+head(designMat)
+
+fit <- lmFit(assay(indata, "log_cpm"), designMat)
+
+# Difference in expression 
+
+contrast.matrixNut<- makeContrasts(treatment, levels = designMat)
+fitNut <- contrasts.fit(fit,contrast.matrixNut)
+fitNut <- eBayes(fitNut)
+limmaResNut <- topTable(fitNut, adjust.method = "BH", n = Inf, sort.by = "P")
+
+
+dim(limmaResNut[limmaResNut$adj.P.Val <0.05,])
+table(colData(indata)$tx)
+
+new_hist_padjval_100breaks <- hist(limmaResNut$adj.P.Val, breaks=100)
+new_hist_pval_100breaks <- hist(limmaResNut$P.Value, breaks=100)
+##shows spike near 0
+
+sig_limmaResNut <- limmaResNut[limmaResNut$adj.P.Val <0.1,]
+sig_limmaResNut <- sig_limmaResNut[order(sig_limmaResNut$adj.P.Val),]
+
+sigp_limmaResNut <- limmaResNut[limmaResNut$P.Value <0.01,]
+sigp_limmaResNut <- sigp_limmaResNut[order(sigp_limmaResNut$P.Value),]
+
+#write.csv(sig_limmaResNut, "sig_TBgenes_padj.csv")
+
+top_500_genes <- limmaResNut[1:500,]
+top_1k_genes <- limmaResNut[1:1000,]
+
+```
+
+There are There are `r nrow(sig_limmaResNut)` genes with an FDR<0.1, and `r nrow(sigp_limmaResNut)` genes with p<0.01.  significant genes. 
+
+
+##### Heatmap
+```{r }
+datatable(sig_limmaResNut, 
+          options=list(scrollX=T,pageLength=20),
+          rownames = T)
+
+## Make a Heatmap of all genes
+mat = as.matrix(assay(indata[row.names(top_500_genes),],"log_cpm"))
+mat = t(scale(t(mat)))
+#mat = mat[,order(colData(indata)$"tx")]
+
+df=data.frame(tx=colData(indata)$"tx", sex=colData(indata)$"sex", genotype=colData(indata)$"genotype") 
+
+#df=df[order(df$BMI),]
+
+#o1 = seriate(dist(mat), method = "TSP")
+#o2 = seriate(dist(t(mat)), method = "TSP")
+
+ha = HeatmapAnnotation(df = df, col = list(tx=c("PAC"="Red","VEH"="Blue")))
+
+Heatmap(mat,show_row_names=F,show_column_names = T, top_annotation = ha, cluster_columns = T )
+```
+
+#### males
+```{r}
+indata <- spinal_chord_d7
+
+indata = indata[,colData(indata)$sex == "M"]
+dim(indata)
+table(colData(indata)$sex)
+
+# diffex model 
+designMat <- model.matrix(~factor(tx), data=colData(indata))
+
+colnames(designMat)
+colnames(designMat) <- c("Intercept", "treatment")
+
+head(designMat)
+
+fit <- lmFit(assay(indata, "log_cpm"), designMat)
+
+# Difference in expression 
+
+contrast.matrixNut<- makeContrasts(treatment, levels = designMat)
+fitNut <- contrasts.fit(fit,contrast.matrixNut)
+fitNut <- eBayes(fitNut)
+limmaResNut <- topTable(fitNut, adjust.method = "BH", n = Inf, sort.by = "P")
+
+
+dim(limmaResNut[limmaResNut$adj.P.Val <0.05,])
+table(colData(indata)$tx)
+
+new_hist_padjval_100breaks <- hist(limmaResNut$adj.P.Val, breaks=100)
+new_hist_pval_100breaks <- hist(limmaResNut$P.Value, breaks=100)
+##shows spike near 0
+
+sig_limmaResNut <- limmaResNut[limmaResNut$adj.P.Val <0.1,]
+sig_limmaResNut <- sig_limmaResNut[order(sig_limmaResNut$adj.P.Val),]
+
+sigp_limmaResNut <- limmaResNut[limmaResNut$P.Value <0.01,]
+sigp_limmaResNut <- sigp_limmaResNut[order(sigp_limmaResNut$P.Value),]
+
+#write.csv(sig_limmaResNut, "sig_TBgenes_padj.csv")
+
+top_500_genes <- limmaResNut[1:500,]
+top_1k_genes <- limmaResNut[1:1000,]
+
+```
+There are There are `r nrow(sig_limmaResNut)` genes with an FDR<0.1, and `r nrow(sigp_limmaResNut)` genes with p<0.01.  significant genes. 
+
+
+##### Heatmap
+```{r }
+datatable(sig_limmaResNut, 
+          options=list(scrollX=T,pageLength=20),
+          rownames = T)
+
+## Make a Heatmap of all genes
+mat = as.matrix(assay(indata[row.names(top_500_genes),],"log_cpm"))
+mat = t(scale(t(mat)))
+#mat = mat[,order(colData(indata)$"tx")]
+
+df=data.frame(tx=colData(indata)$"tx", sex=colData(indata)$"sex", genotype=colData(indata)$"genotype") 
+
+#df=df[order(df$BMI),]
+
+#o1 = seriate(dist(mat), method = "TSP")
+#o2 = seriate(dist(t(mat)), method = "TSP")
+
+ha = HeatmapAnnotation(df = df, col = list(tx=c("PAC"="Red","VEH"="Blue")))
+
+Heatmap(mat,show_row_names=F,show_column_names = T, top_annotation = ha, cluster_columns = T )
+```
+
+#### females {.tabset}
+```{r}
+indata <- spinal_chord_d7
+
+indata = indata[,colData(indata)$sex == "F"]
+dim(indata)
+table(colData(indata)$sex)
+
+# diffex model 
+designMat <- model.matrix(~factor(tx), data=colData(indata))
+
+colnames(designMat)
+colnames(designMat) <- c("Intercept", "treatment")
+
+head(designMat)
+
+fit <- lmFit(assay(indata, "log_cpm"), designMat)
+
+# Difference in expression 
+
+contrast.matrixNut<- makeContrasts(treatment, levels = designMat)
+fitNut <- contrasts.fit(fit,contrast.matrixNut)
+fitNut <- eBayes(fitNut)
+limmaResNut <- topTable(fitNut, adjust.method = "BH", n = Inf, sort.by = "P")
+
+
+dim(limmaResNut[limmaResNut$adj.P.Val <0.05,])
+table(colData(indata)$tx)
+
+new_hist_padjval_100breaks <- hist(limmaResNut$adj.P.Val, breaks=100)
+new_hist_pval_100breaks <- hist(limmaResNut$P.Value, breaks=100)
+##shows spike near 0
+
+sig_limmaResNut <- limmaResNut[limmaResNut$adj.P.Val <0.1,]
+sig_limmaResNut <- sig_limmaResNut[order(sig_limmaResNut$adj.P.Val),]
+
+sigp_limmaResNut <- limmaResNut[limmaResNut$P.Value <0.01,]
+sigp_limmaResNut <- sigp_limmaResNut[order(sigp_limmaResNut$P.Value),]
+
+#write.csv(sig_limmaResNut, "sig_TBgenes_padj.csv")
+
+top_500_genes <- limmaResNut[1:500,]
+top_1k_genes <- limmaResNut[1:1000,]
+
+```
+There are There are `r nrow(sig_limmaResNut)` genes with an FDR<0.1, and `r nrow(sigp_limmaResNut)` genes with p<0.01.  significant genes. 
+
+
+##### Heatmap
+```{r }
+datatable(sig_limmaResNut, 
+          options=list(scrollX=T,pageLength=20),
+          rownames = T)
+
+## Make a Heatmap of all genes
+mat = as.matrix(assay(indata[row.names(top_500_genes),],"log_cpm"))
+mat = t(scale(t(mat)))
+#mat = mat[,order(colData(indata)$"tx")]
+
+df=data.frame(tx=colData(indata)$"tx", sex=colData(indata)$"sex", genotype=colData(indata)$"genotype") 
+
+#df=df[order(df$BMI),]
+
+#o1 = seriate(dist(mat), method = "TSP")
+#o2 = seriate(dist(t(mat)), method = "TSP")
+
+ha = HeatmapAnnotation(df = df, col = list(tx=c("PAC"="Red","VEH"="Blue")))
+
+Heatmap(mat,show_row_names=F,show_column_names = T, top_annotation = ha, cluster_columns = T )
+```
+
+#### both {.tabset}
+```{r}
+indata <- spinal_chord_d7
+
+designMat <- model.matrix(~factor(tx)+factor(sex)  + factor(genotype), data=colData(indata))
+
+colnames(designMat)
+colnames(designMat) <- c("Intercept", "treatment","sex",  "genotype")
+
+head(designMat)
+
+fit <- lmFit(assay(indata, "log_cpm"), designMat)
+
+# Difference in expression 
+
+contrast.matrixNut<- makeContrasts(treatment, levels = designMat)
+fitNut <- contrasts.fit(fit,contrast.matrixNut)
+fitNut <- eBayes(fitNut)
+limmaResNut <- topTable(fitNut, adjust.method = "BH", n = Inf, sort.by = "P")
+
+
+dim(limmaResNut[limmaResNut$adj.P.Val <0.05,])
+table(colData(indata)$bmi_cat2)
+
+new_hist_padjval_100breaks <- hist(limmaResNut$adj.P.Val, breaks=100)
+new_hist_pval_100breaks <- hist(limmaResNut$P.Value, breaks=100)
+##shows spike near 0
+
+sig_limmaResNut <- limmaResNut[limmaResNut$adj.P.Val <0.1,]
+sig_limmaResNut <- sig_limmaResNut[order(sig_limmaResNut$adj.P.Val),]
+
+#write.csv(sig_limmaResNut, "sig_TBgenes_padj.csv")
+
+top_500_genes <- limmaResNut[1:500,]
+top_1k_genes <- limmaResNut[1:1000,]
+```
+##### Heatmap
+```{r }
+datatable(sig_limmaResNut, 
+          options=list(scrollX=T,pageLength=20),
+          rownames = T)
+
+## Make a Heatmap of all genes
+mat = as.matrix(assay(indata[row.names(top_500_genes),],"log_cpm"))
+mat = t(scale(t(mat)))
+#mat = mat[,order(colData(indata)$"tx")]
+
+df=data.frame(tx=colData(indata)$"tx", sex=colData(indata)$"sex", genotype=colData(indata)$"genotype") 
+
+ha = HeatmapAnnotation(df = df, col = list(tx=c("PAC"="Red","VEH"="Blue")))
+
+Heatmap(mat,show_row_names=F,show_column_names = T, top_annotation = ha, cluster_columns = T )
+```
+
+
+
+#### Tx diffex, VEH {.tabset}
+```{r}
+indata <- spinal_chord_d7
+
+indata = indata[,colData(indata)$tx == "VEH"]
+dim(indata)
+table(colData(indata)$tx)
+
+designMat <- model.matrix(~factor(genotype) + factor(sex) , data=colData(indata))#+factor(sex),"sex"
+
+colnames(designMat)
+colnames(designMat) <- c("Intercept", "genotype", "sex")
+
+head(designMat)
+
+fit <- lmFit(assay(indata, "log_cpm"), designMat)
+
+# Difference in expression 
+
+contrast.matrixNut <- makeContrasts(genotype, levels = designMat)
+fitNut <- contrasts.fit(fit,contrast.matrixNut)
+fitNut <- eBayes(fitNut)
+limmaResNut <- topTable(fitNut, adjust.method = "BH", n = Inf, sort.by = "P")
+
+
+dim(limmaResNut[limmaResNut$adj.P.Val <0.4,])
+#table(colData(indata)$bmi_cat2)
+
+new_hist_padjval_100breaks <- hist(limmaResNut$adj.P.Val, breaks=100)
+new_hist_pval_100breaks <- hist(limmaResNut$P.Value, breaks=100)
+##shows spike near 0
+
+## for IPA
+#ipa_d7DRG <- limmaResNut[limmaResNut$adj.P.Val <0.4,]
+#write.csv(ipa_d7DRG, "ipa_d7DRG.csv")
+
+sig_limmaResNut <- limmaResNut[limmaResNut$adj.P.Val <0.1,]
+sig_limmaResNut <- sig_limmaResNut[order(sig_limmaResNut$adj.P.Val),]
+
+#write.csv(sig_limmaResNut, "sig_TBgenes_padj.csv")
+
+top_500_genes <- limmaResNut[1:500,]
+top_1k_genes <- limmaResNut[1:1000,]
+
+
+results <- decideTests(fitNut)
+vennDiagram(results)
+
+```
+##### Heatmap
+```{r }
+datatable(sig_limmaResNut, 
+          options=list(scrollX=T,pageLength=20),
+          rownames = T)
+
+## Make a Heatmap of all genes
+mat = as.matrix(assay(indata[row.names(top_500_genes),],"log_cpm"))
+mat = t(scale(t(mat)))
+#mat = mat[,order(colData(indata)$"tx")]
+
+df=data.frame(tx=colData(indata)$"tx", sex=colData(indata)$"sex", genotype=colData(indata)$"genotype") 
+
+ha = HeatmapAnnotation(df = df, col = list(tx=c("PAC"="Red","VEH"="Blue")))
+
+Heatmap(mat,show_row_names=F,show_column_names = T, top_annotation = ha, cluster_columns = T )
+```
+
+#### Tx diffex, PAC {.tabset}
+```{r}
+indata <- spinal_chord_d7
+
+indata = indata[,colData(indata)$tx == "PAC"]
+dim(indata)
+table(colData(indata)$tx)
+
+designMat <- model.matrix(~factor(genotype) + factor(sex) , data=colData(indata))#+factor(sex),"sex"
+
+colnames(designMat)
+colnames(designMat) <- c("Intercept", "genotype", "sex")
+
+head(designMat)
+
+fit <- lmFit(assay(indata, "log_cpm"), designMat)
+
+# Difference in expression 
+
+contrast.matrixNut <- makeContrasts(genotype, levels = designMat)
+fitNut <- contrasts.fit(fit,contrast.matrixNut)
+fitNut <- eBayes(fitNut)
+limmaResNut <- topTable(fitNut, adjust.method = "BH", n = Inf, sort.by = "P")
+
+
+dim(limmaResNut[limmaResNut$adj.P.Val <0.4,])
+#table(colData(indata)$bmi_cat2)
+
+new_hist_padjval_100breaks <- hist(limmaResNut$adj.P.Val, breaks=100)
+new_hist_pval_100breaks <- hist(limmaResNut$P.Value, breaks=100)
+##shows spike near 0
+
+## for IPA
+#ipa_d7DRG <- limmaResNut[limmaResNut$adj.P.Val <0.4,]
+#write.csv(ipa_d7DRG, "ipa_d7DRG.csv")
+
+sig_limmaResNut <- limmaResNut[limmaResNut$adj.P.Val <0.1,]
+sig_limmaResNut <- sig_limmaResNut[order(sig_limmaResNut$adj.P.Val),]
+
+#write.csv(sig_limmaResNut, "sig_TBgenes_padj.csv")
+
+top_500_genes <- limmaResNut[1:500,]
+top_1k_genes <- limmaResNut[1:1000,]
+
+
+results <- decideTests(fitNut)
+vennDiagram(results)
+
+```
+##### Heatmap
+```{r }
+datatable(sig_limmaResNut, 
+          options=list(scrollX=T,pageLength=20),
+          rownames = T)
+
+## Make a Heatmap of all genes
+mat = as.matrix(assay(indata[row.names(top_500_genes),],"log_cpm"))
+mat = t(scale(t(mat)))
+#mat = mat[,order(colData(indata)$"tx")]
+
+df=data.frame(tx=colData(indata)$"tx", sex=colData(indata)$"sex", genotype=colData(indata)$"genotype") 
+
+ha = HeatmapAnnotation(df = df, col = list(tx=c("PAC"="Red","VEH"="Blue")))
+
+Heatmap(mat,show_row_names=F,show_column_names = T, top_annotation = ha, cluster_columns = T )
+```
+
+
+
+
+# Session
+```{r }
+sessionInfo()
+```
+
+
