@@ -1,0 +1,645 @@
+---
+title: "D7_CIPN_aspli"
+output: html_document
+date: '2022-10-15'
+---
+
+```{r setup, include=FALSE}
+# if (!requireNamespace("BiocManager", quietly = TRUE))
+# install.packages("BiocManager")
+#  BiocManager::install("ASpli")
+library(ASpli)
+library(GenomicFeatures)
+library(GenomicRanges)
+library("org.Mm.eg.db")
+library(rtracklayer )
+
+
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+# Make TxDb and features object
+```{r cars}
+# Features and TxDb
+# loads annotation data for mouse 
+org.Mm.eg()
+db <- org.Mm.eg.db
+
+# use Ensemble TxDb to match BAM alignments of samples
+TxDb <- loadDb("mmusculusEnsembl.sqlite")
+
+# map Ensemble IDs and gene names
+df <- data.frame(genes(TxDb))
+df$symbol <- mapIds(org.Mm.eg.db, keys=df$gene_id , keytype = "ENSEMBL", column="SYMBOL")
+
+symbols <- data.frame(row.names=df$gene_id, 
+                      symbol=df$symbol,
+                      genes <- df$gene_id)
+sym <- symbols
+names(sym) <- c("symbol", "gene")
+x <- which(is.na(sym[,"symbol"]))
+sym[which(is.na(sym[,"symbol"])), ] <- sym[x,"gene"]
+sym$gene <- NULL
+
+# make features object for aspli with gene symbol names included
+features2 <- binGenome(TxDb, geneSymbols = sym )
+saveRDS(features2, "features2_mmusculusEnsembl.RDS")
+
+
+# read features into R with this code
+features <- readRDS("features2_mmusculusEnsembl.RDS") 
+```
+
+# ASPLI
+### R code from vignette source 'ASpli.Rnw'
+
+
+```{r}
+#bams and target file ----
+
+# file path where all bam files are stored; mm10_ch14 were aligned using chromosomes 1, 5, and 14
+filepath <- file.path("~/johnsonlab_nb/cipn_files/D7_rnaseq/star_results/mm10_ch14")
+
+# Get lists of file names; bam, indexed bam
+BAMFiles <- list.files(path=filepath,
+                       pattern = "bam$", full.names = TRUE)
+
+indexedBAMFiles <- list.files(path=filepath,
+                              pattern = "\\.bai$", full.names = TRUE)
+
+
+
+# sort BAM file names by tissue
+BAMFiles.drg <- BAMFiles[grep(pattern = "DRG_",   BAMFiles)]
+BAMFiles.pag <- BAMFiles[grep(pattern = "PAG_",   BAMFiles)]
+BAMFiles.spinalcord <- BAMFiles[grep(pattern = "Spinal_Cord_",   BAMFiles)]
+
+
+# sort indexed BAM file names by tissue
+indexedBAMFiles.drg <- indexedBAMFiles[grep(pattern = "DRG_",   indexedBAMFiles)]
+indexedBAMFiles.pag <- indexedBAMFiles[grep(pattern = "PAG_",   indexedBAMFiles)]
+indexedBAMFiles.spinalcord <- indexedBAMFiles[grep(pattern = "Spinal_Cord_",   indexedBAMFiles)]
+
+
+# targets dataframe for each tissue, includes annotation data with treatment, genotype, and sex for each sample
+
+## targets dataframe for DRG
+targets.DRG <- readr::read_tsv("~/johnsonlab_nb/cipn_files/D7_DRG/annotation.txt")
+targets.drg  <- data.frame(row.names = paste0('DRG_',targets.DRG$sample),
+                       bam = BAMFiles.drg,
+                       tx = targets.DRG$tx,
+                       genotype = targets.DRG$genotype,
+                       stringsAsFactors = FALSE)
+
+
+## targets dataframe for PAG 
+targets.PAG <- readr::read_tsv("~/johnsonlab_nb/cipn_files/D7_PAG/annotation.txt")
+targets.pag  <- data.frame(row.names = paste0("PAG_", targets.PAG$sample),
+                      bam = BAMFiles.pag,
+                           tx  = targets.PAG$tx,
+                       genotype =targets.PAG$genotype,
+                       stringsAsFactors = FALSE)
+
+
+
+
+
+# targets dataframe for spinal_cord
+targets.sc <- readr::read_tsv("~/johnsonlab_nb/cipn_files/D7_Spinal_Cord/annotation.txt")
+targets.spinal_cord  <- data.frame(row.names = paste0("Spinal_Cord_", targets.sc$sample),
+                      bam = BAMFiles.spinalcord,
+                           tx  = targets.sc$tx,
+                       genotype =targets.sc$genotype,
+                       stringsAsFactors = FALSE)
+
+# remove annotation data objects
+rm(targets.DRG, targets.PAG, targets.sc)
+
+# save targets dataframes
+saveRDS(targets.drg, "DRG_targets.RDS")
+saveRDS(targets.pag, "PAG_targets.RDS")
+saveRDS(targets.spinal_cord, "Spinal_Cord_targets.RDS")
+
+```
+
+
+# DRG{.tabset}
+## Overlap reads, features, and quantify junctions {.tabset}
+```{r}
+
+
+tissue <- "DRG"
+targets <- readRDS("DRG_targets.RDS")
+
+# Overlap reads and features
+gbcounts <- gbCounts( features = features,
+                       targets = targets,
+                       minReadLength = 100, maxISize = 50000)
+
+# Accessor Information for gbcounts()
+# GeneCounts <- countsg(counts)
+# GeneRd <- rdsg(counts)
+# BinCounts <- countsb(counts)
+# BinRd <- rdsb(counts)
+# JunctionCounts <- countsj(counts)
+
+saveRDS(gbcounts, file.path(tissue, paste0(tissue, "_gbcounts.RDS")))
+writeCounts(counts=gbcounts, output.dir = tissue)
+writeRds(counts=gbcounts, output.dir = tissue)
+
+# read in gbcounts for reports
+gbcounts <- readRDS(file.path(tissue, paste0(tissue, "_gbcounts.RDS")))
+
+# quantify junctions
+asd <- jCounts(counts=gbcounts, features=features, minReadLength=100)
+saveRDS(asd, file.path(tissue, paste0(tissue, "_asd.RDS")))
+asd <- readRDS(file.path(tissue, paste0(tissue, "_asd.RDS")))
+
+
+# Accessor information from jCounts()
+# irPIR <- irPIR( asd )
+# > altPSI <- altPSI( asd )
+# > esPSI <- esPSI( asd )
+# > allBins <- joint( asd )
+# > junctionsPJU <- junctionsPIR( asd )
+# > junctionsPIR <- junctionsPIR( asd )
+# Export tables to text files:
+# > writeAS(as=asd, output.dir="example")
+
+
+```
+
+
+## Differential Reports
+
+### gbDUreport: Bin-based coverage differential signals of AS
+```{r}
+tissue <- "DRG"
+counts <- gbcounts
+
+
+
+targets$tx <- as.factor(targets$tx)
+targets$genotype <- as.factor(targets$genotype)
+
+# formula model for analysis
+form <- formula(~tx+genotype)
+design<-model.matrix(form,targets)
+colnames(design)
+
+gb   <- gbDUreport(gbcounts, formula = form , coef =2 )
+#View(gb)
+
+write.csv(gbcounts@exon.intron.counts, 
+          file.path(tissue, "gb_report", "IntExCount.csv"))
+write.csv(gbcounts@junction.counts, 
+          file.path(tissue, "gb_report, Junct.csv"))
+
+# differential expression genes
+DEgenes<-genesDE(gb)
+write.csv(DEgenes, file.path(tissue, "gb_report","DEgenes.tx.genotype.csv"))
+
+# differential junction use report
+jdur <- jDUreport(asd, formula = form, coef = 2 ,
+                  runUniformityTest = FALSE)
+
+                  
+
+```
+
+### jDUreport: Junction-centered analysis of AS
+```{r}
+
+# junctionDUreport is deprecated but works for all 3 tissues
+du <- junctionDUreport( counts,
+                        targets,
+                        appendTo = NULL,
+                        minGenReads = 10,
+                        minRds = 0.05,
+                        threshold = 5,
+                        offset = FALSE,
+                        offsetUseFitGeneX = TRUE,
+                        contrast = NULL,
+                        forceGLM = FALSE )
+
+writeDU(du, output.dir =file.path(tissue, "du_report"))
+
+
+```
+
+
+## Integrative Reports
+### Splicing Report
+```{r}
+sr <- splicingReport(gb, jdur, gbcounts)
+
+# regions of interest
+#Chr1: 46-77Mb
+#Chr14: 103-124.46 Mb
+
+ch1start <- 1000000*46
+ch1end <- 1000000*77
+
+ch14start <- 1000000*103
+ch14end <- 1000000*124.46
+
+# binbased splicing report selected for only regions of interest
+df <- as.data.frame(sr@binbased)
+df.ch1 <- df[grepl("1:",df$gene_coordinates),]
+df.ch14 <- df[grepl("14:",df$gene_coordinates),]
+
+library(tidyverse)
+df.ch1.region <- df.ch1 %>% 
+          filter(start >= ch1start) %>% 
+          filter(end <= ch1end)
+df.ch14.region <- df.ch14 %>% 
+          filter(start >= ch14start) %>% 
+          filter(end <= ch14end)
+
+write.csv(df.ch1.region, file.path(tissue, "sr_ch1.csv"))
+write.csv(df.ch14.region, file.path(tissue, "sr_ch14.csv"))
+
+
+# entire splicing report
+writeSplicingReport( sr, output.dir = file.path(tissue, "sr"))
+
+```
+
+
+### integrateSignals(): Region specific summarization of differential usage signals.
+```{r}
+ is <- integrateSignals(sr, asd)
+
+
+```
+
+### exportSplicingReport: Export splicing reports in HTML pages.
+```{r}
+exportSplicingReports( sr,
+                       output.dir=file.path(tissue, "sr", "html"),
+                       openInBrowser = FALSE,
+                       maxBinFDR = 0.2,
+                       maxJunctionFDR = 0.2 )
+
+
+
+```
+
+
+### exportIntegratedSignals(): Export integrated signals into HTML pages
+```{r}
+# exportIntegratedSignals(is,sr=sr,output.dir = file.path(tissue, "is", "html"), 
+#                         counts=gbcounts,features=features,asd=asd)
+
+# REQUIRES MERGEDBAMS
+```
+
+
+
+
+
+
+
+# PAG{.tabset}
+## Overlap reads, features, and quantify junctions {.tabset}
+```{r}
+
+
+tissue <- "PAG"
+targets <- readRDS("PAG_targets.RDS")
+
+# Overlap reads and features
+gbcounts <- gbCounts( features = features,
+                       targets = targets,
+                       minReadLength = 100, maxISize = 50000)
+
+
+saveRDS(gbcounts, file.path(tissue, paste0(tissue, "_gbcounts.RDS")))
+writeCounts(counts=gbcounts, output.dir = tissue)
+writeRds(counts=gbcounts, output.dir = tissue)
+
+gbcounts <- readRDS(file.path(tissue, paste0(tissue, "_gbcounts.RDS")))
+
+# quantify junctions
+asd <- jCounts(counts=gbcounts, features=features, minReadLength=100)
+saveRDS(asd, file.path(tissue, paste0(tissue, "_asd.RDS")))
+
+asd <- readRDS(file.path(tissue, paste0(tissue, "_asd.RDS")))
+
+```
+
+
+## Differential Reports
+
+### gbDUreport: Bin-based coverage differential signals of AS
+```{r}
+tissue <- "PAG"
+counts <- gbcounts
+
+
+
+targets$tx <- as.factor(targets$tx)
+targets$genotype <- as.factor(targets$genotype)
+
+form <- formula(~tx+genotype)
+design<-model.matrix(form,targets)
+colnames(design)
+
+gb   <- gbDUreport(gbcounts, formula = form , coef =2 )
+#View(gb)
+#dir.create(file.path(tissue, "gb_report"))
+ifelse(!dir.exists(file.path(tissue, "gb_report")), dir.create(file.path(tissue, "gb_report")), FALSE)
+write.csv(gbcounts@exon.intron.counts, 
+          file.path(tissue, "gb_report", "IntExCount.csv"))
+write.csv(gbcounts@junction.counts, 
+          file.path(tissue, "gb_report, Junct.csv"))
+
+DEgenes<-genesDE(gb)
+write.csv(DEgenes, file.path(tissue, "gb_report","DEgenes.tx.genotype.csv"))
+
+jdur <- jDUreport(asd, formula = form, coef = 2 ,
+                  runUniformityTest = FALSE)
+#########
+
+
+ jdur <- DUreport(counts, 
+            targets,
+            minGenReads = 10,
+            minBinReads = 5,
+            minRds = 0.05,
+            offset = FALSE,
+            offsetAggregateMode =  c( "geneMode", "binMode" )[1],
+            offsetUseFitGeneX = TRUE,
+            contrast = NULL,
+            forceGLM = FALSE,
+            ignoreExternal = TRUE,
+            ignoreIo = TRUE,
+            ignoreI = FALSE,
+            filterWithContrasted = FALSE,
+            verbose = FALSE)
+
+
+# Accessorinfo
+#  geneX <- genesDE( gb )
+#  binDU <- binsDU( gb )
+
+                  
+
+```
+
+### jDUreport: Junction-centered analysis of AS
+```{r}
+# deprecated, works on all tissues
+du <- junctionDUreport( counts,
+                        targets,
+                        appendTo = gb,
+                        minGenReads = 10,
+                        minRds = 0.05,
+                        threshold = 5,
+                        offset = FALSE,
+                        offsetUseFitGeneX = TRUE,
+                        contrast = NULL,
+                        forceGLM = FALSE )
+
+writeDU(du, output.dir =file.path(tissue, "du_report"))
+
+
+
+
+
+
+```
+
+
+## Integrative Reports
+### Splicing Report
+```{r}
+
+sr <- splicingReport(gb, jdur, counts)
+
+# Accesors:
+# > binbased( sr )
+# > localebased( sr )
+# > anchorbased( sr )
+writeSplicingReport( sr, output.dir = file.path(tissue, "sr"))
+
+```
+
+
+### integrateSignals(): Region specific summarization of differential usage signals.
+```{r}
+ is <- integrateSignals(sr, asd)
+
+                      
+```
+
+### exportSplicingReport: Export splicing reports in HTML pages.
+```{r}
+exportSplicingReports( sr,
+                       output.dir=file.path(tissue, "sr", "html"),
+                       openInBrowser = FALSE,
+                       maxBinFDR = 0.2,
+                       maxJunctionFDR = 0.2 )
+
+
+
+```
+
+
+### exportIntegratedSignals(): Export integrated signals into HTML pages
+```{r}
+# exportIntegratedSignals(is,sr=sr,output.dir = file.path(tissue, "is", "html"), 
+#                         counts=gbcounts,features=features,asd=asd)
+
+# REQUIRES MERGEDBAMS
+```
+
+
+
+
+
+
+# Spinal_Cord{.tabset}
+## Overlap reads, features, and quantify junctions {.tabset}
+```{r}
+
+
+tissue <- "Spinal_Cord"
+targets <- readRDS("Spinal_Cord_targets.RDS")
+
+# Overlap reads and features
+gbcounts <- gbCounts( features = features,
+                       targets = targets,
+                       minReadLength = 100, maxISize = 50000)
+
+# Accessor Information for gbcounts()
+# GeneCounts <- countsg(counts)
+# GeneRd <- rdsg(counts)
+# BinCounts <- countsb(counts)
+# BinRd <- rdsb(counts)
+# JunctionCounts <- countsj(counts)
+
+saveRDS(gbcounts, file.path(tissue, paste0(tissue, "_gbcounts.RDS")))
+writeCounts(counts=gbcounts, output.dir = tissue)
+writeRds(counts=gbcounts, output.dir = tissue)
+
+# read in gbcounts for reports
+gbcounts <- readRDS(file.path(tissue, paste0(tissue, "_gbcounts.RDS")))
+
+# quantify junctions
+asd <- jCounts(counts=gbcounts, features=features, minReadLength=100)
+saveRDS(asd, file.path(tissue, paste0(tissue, "_asd.RDS")))
+asd <- readRDS(file.path(tissue, paste0(tissue, "_asd.RDS")))
+
+
+# Accessor information from jCounts()
+# irPIR <- irPIR( asd )
+# > altPSI <- altPSI( asd )
+# > esPSI <- esPSI( asd )
+# > allBins <- joint( asd )
+# > junctionsPJU <- junctionsPIR( asd )
+# > junctionsPIR <- junctionsPIR( asd )
+# Export tables to text files:
+# > writeAS(as=asd, output.dir="example")
+
+
+```
+
+
+## Differential Reports
+
+### gbDUreport: Bin-based coverage differential signals of AS
+```{r}
+tissue <- "Spinal_Cord"
+counts <- gbcounts
+
+
+
+targets$tx <- as.factor(targets$tx)
+targets$genotype <- as.factor(targets$genotype)
+
+# formula model for analysis
+form <- formula(~tx+genotype)
+design<-model.matrix(form,targets)
+colnames(design)
+
+gb   <- gbDUreport(gbcounts, formula = form , coef =2 )
+#View(gb)
+
+write.csv(gbcounts@exon.intron.counts, 
+          file.path(tissue, "gb_report", "IntExCount.csv"))
+write.csv(gbcounts@junction.counts, 
+          file.path(tissue, "gb_report, Junct.csv"))
+
+# differential expression genes
+DEgenes<-genesDE(gb)
+write.csv(DEgenes, file.path(tissue, "gb_report","DEgenes.tx.genotype.csv"))
+
+# differential junction use report
+jdur <- jDUreport(asd, formula = form, coef = 2 ,
+                  runUniformityTest = FALSE)
+
+                  
+
+```
+
+### jDUreport: Junction-centered analysis of AS
+```{r}
+
+# junctionDUreport is deprecated but works for all 3 tissues
+du <- junctionDUreport( counts,
+                        targets,
+                        appendTo = NULL,
+                        minGenReads = 10,
+                        minRds = 0.05,
+                        threshold = 5,
+                        offset = FALSE,
+                        offsetUseFitGeneX = TRUE,
+                        contrast = NULL,
+                        forceGLM = FALSE )
+
+writeDU(du, output.dir =file.path(tissue, "du_report"))
+
+
+```
+
+
+## Integrative Reports
+### Splicing Report
+```{r}
+sr <- splicingReport(gb, jdur, gbcounts)
+
+# regions of interest
+#Chr1: 46-77Mb
+#Chr14: 103-124.46 Mb
+
+ch1start <- 1000000*46
+ch1end <- 1000000*77
+
+ch14start <- 1000000*103
+ch14end <- 1000000*124.46
+
+# binbased splicing report selected for only regions of interest
+df <- as.data.frame(sr@binbased)
+df.ch1 <- df[grepl("1:",df$gene_coordinates),]
+df.ch14 <- df[grepl("14:",df$gene_coordinates),]
+
+library(tidyverse)
+df.ch1.region <- df.ch1 %>% 
+          filter(start >= ch1start) %>% 
+          filter(end <= ch1end)
+df.ch14.region <- df.ch14 %>% 
+          filter(start >= ch14start) %>% 
+          filter(end <= ch14end)
+
+write.csv(df.ch1.region, file.path(tissue, "sr_ch1.csv"))
+write.csv(df.ch14.region, file.path(tissue, "sr_ch14.csv"))
+
+
+# entire splicing report
+writeSplicingReport( sr, output.dir = file.path(tissue, "sr"))
+
+```
+
+
+### integrateSignals(): Region specific summarization of differential usage signals.
+```{r}
+ is <- integrateSignals(sr, asd)
+
+
+```
+
+### exportSplicingReport: Export splicing reports in HTML pages.
+```{r}
+exportSplicingReports( sr,
+                       output.dir=file.path(tissue, "sr", "html"),
+                       openInBrowser = FALSE,
+                       maxBinFDR = 0.2,
+                       maxJunctionFDR = 0.2 )
+
+
+
+```
+
+
+### exportIntegratedSignals(): Export integrated signals into HTML pages
+```{r}
+# exportIntegratedSignals(is,sr=sr,output.dir = file.path(tissue, "is", "html"), 
+#                         counts=gbcounts,features=features,asd=asd)
+
+# REQUIRES MERGEDBAMS
+```
+
+
+
+
+
+
+
+# SessionInfo
+```{r}
+
+sessionInfo()
+```
+
+
