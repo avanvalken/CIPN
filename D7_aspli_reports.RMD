@@ -1,0 +1,1054 @@
+---
+title: "D7_aspli_reports"
+output: html_document
+date: '2023-01-04'
+---
+
+```{r setup, include=FALSE}
+suppressPackageStartupMessages({
+  
+  library(ASpli)
+  library(GenomicFeatures)
+  library(GenomicRanges)
+  library("org.Mm.eg.db")
+  library(rtracklayer )
+  library(tidyverse)
+
+})
+knitr::opts_chunk$set(echo = TRUE)
+```
+# Make TxDb and features object
+```{r cars}
+# Features and TxDb
+# loads annotation data for mouse 
+org.Mm.eg()
+db <- org.Mm.eg.db
+
+# use Ensemble TxDb to match BAM alignments of samples
+TxDb <- loadDb("mmusculusEnsembl.sqlite")
+
+# map Ensemble IDs and gene names
+df <- data.frame(genes(TxDb))
+df$symbol <- mapIds(org.Mm.eg.db, keys=df$gene_id , keytype = "ENSEMBL", column="SYMBOL")
+
+symbols <- data.frame(row.names=df$gene_id, 
+                      symbol=df$symbol,
+                      genes <- df$gene_id)
+sym <- symbols
+names(sym) <- c("symbol", "gene")
+x <- which(is.na(sym[,"symbol"]))
+sym[which(is.na(sym[,"symbol"])), ] <- sym[x,"gene"]
+sym$gene <- NULL
+
+# make features object for aspli with gene symbol names included
+features2 <- binGenome(TxDb, geneSymbols = sym )
+saveRDS(features2, "features2_mmusculusEnsembl.RDS")
+
+
+# read features into R with this code
+features <- readRDS("features2_mmusculusEnsembl.RDS") 
+```
+# Create targets dataframe of bam locations and variable information
+```{r}
+#bams and target file ----
+
+# file path where all bam files are stored; mm10_ch14 were aligned using chromosomes 1, 5, and 14
+filepath <- file.path("~/johnsonlab_nb/cipn_files/D7_rnaseq/star_results/mm10_ch14")
+
+# Get lists of file names; bam, indexed bam
+BAMFiles <- list.files(path=filepath,
+                       pattern = "bam$", full.names = TRUE)
+
+indexedBAMFiles <- list.files(path=filepath,
+                              pattern = "\\.bai$", full.names = TRUE)
+
+
+
+# sort BAM file names by tissue
+BAMFiles.drg <- BAMFiles[grep(pattern = "DRG_",   BAMFiles)]
+BAMFiles.pag <- BAMFiles[grep(pattern = "PAG_",   BAMFiles)]
+BAMFiles.spinalcord <- BAMFiles[grep(pattern = "Spinal_Cord_",   BAMFiles)]
+
+
+# sort indexed BAM file names by tissue
+indexedBAMFiles.drg <- indexedBAMFiles[grep(pattern = "DRG_",   indexedBAMFiles)]
+indexedBAMFiles.pag <- indexedBAMFiles[grep(pattern = "PAG_",   indexedBAMFiles)]
+indexedBAMFiles.spinalcord <- indexedBAMFiles[grep(pattern = "Spinal_Cord_",   indexedBAMFiles)]
+
+
+# targets dataframe for each tissue, includes annotation data with treatment, genotype, and sex for each sample
+
+## targets dataframe for DRG
+targets.DRG <- readr::read_tsv("~/johnsonlab_nb/cipn_files/D7_DRG/annotation.txt")
+targets.drg  <- data.frame(row.names = paste0('DRG_',targets.DRG$sample),
+                       bam = BAMFiles.drg,
+                       tx = targets.DRG$tx,
+                       genotype = targets.DRG$genotype,
+                       sex=targets.DRG$sex,
+                       stringsAsFactors = FALSE)
+
+
+## targets dataframe for PAG 
+targets.PAG <- readr::read_tsv("~/johnsonlab_nb/cipn_files/D7_PAG/annotation.txt")
+targets.pag  <- data.frame(row.names = paste0("PAG_", targets.PAG$sample),
+                      bam = BAMFiles.pag,
+                           tx  = targets.PAG$tx,
+                       genotype =targets.PAG$genotype,
+                      sex=targets.PAG$sex,
+                       stringsAsFactors = FALSE)
+
+
+
+
+
+# targets dataframe for spinal_cord
+targets.sc <- readr::read_tsv("~/johnsonlab_nb/cipn_files/D7_Spinal_Cord/annotation.txt")
+targets.spinal_cord  <- data.frame(row.names = paste0("Spinal_Cord_", targets.sc$sample),
+                      bam = BAMFiles.spinalcord,
+                           tx  = targets.sc$tx,
+                       genotype =targets.sc$genotype,
+                      sex=targets.sc$sex,
+                       stringsAsFactors = FALSE)
+
+# remove annotation data objects
+rm(targets.DRG, targets.PAG, targets.sc)
+
+# save targets dataframes
+saveRDS(targets.drg, "DRG_targets.RDS")
+saveRDS(targets.pag, "PAG_targets.RDS")
+saveRDS(targets.spinal_cord, "Spinal_Cord_targets.RDS")
+
+```
+
+# Make gbcounts and asd
+```{r}
+features <- readRDS("~/johnsonlab_nb/cipn_files/D7_aspli/features2_mmusculusEnsembl.RDS") 
+
+# tissue is basename of reports to generate
+tissue <- list("DRG", "PAG", "Spinal_Cord")
+
+# targets
+targetspath <- lapply(tissue, paste0, "_targets.RDS")
+targets <- lapply(targetspath, readRDS)
+names(targets) <- c("targets.drg", "targets.pag", "targets.spinal_cord")
+#targets <- lapply(targets, subset, genotype=="J")
+rm(targetspath)
+
+# make counts
+counts <- lapply(targets, gbCounts, features=features, minReadLength = 100, maxISize = 50000)
+names(counts) <- tissue
+## save gbcounts
+countspath <- lapply(tissue, paste0, "_gbcounts.RDS")
+countspath <- mapply(file.path, tissue, countspath)
+mapply(saveRDS, counts, countspath)
+
+# make asd
+asd <- lapply(counts, jCounts, features=features, minReadLength=100)
+names(asd) <- tissue
+## save asd 
+path <- lapply(tissue, paste0, "_asd.RDS")
+path <- mapply(file.path, tissue, path)
+mapply(saveRDS, asd, path)
+
+# subsetted counts and asd
+# targets for subset_J
+targetspath <- lapply(tissue, paste0, "_targets.RDS")
+targets <- lapply(targetspath, readRDS)
+names(targets) <- c("targets.drg", "targets.pag", "targets.spinal_cord")
+targets <- lapply(targets, subset, genotype=="J")
+rm(targetspath)
+
+
+## make Asplicounts object
+gbcounts <- lapply(targets, gbCounts, features=features, minReadLength = 100, maxISize = 50000)
+names(gbcounts) <- tissue
+
+## save gbcounts
+countspath <- lapply(tissue, paste0, "_gbcounts_J.RDS")
+countspath <- mapply(file.path, tissue, countspath)
+mapply(saveRDS, gbcounts, countspath)
+
+## make AspliAS object
+asd <- lapply(gbcounts, jCounts, features=features, minReadLength=100)
+
+## save asd 
+path <- lapply(tissue, paste0, "_asd_J.RDS")
+path <- mapply(file.path, tissue, path)
+mapply(saveRDS, asd, path)
+
+# targets_N
+targetspath <- lapply(tissue, paste0, "_targets.RDS")
+targets <- lapply(targetspath, readRDS)
+names(targets) <- c("targets.drg", "targets.pag", "targets.spinal_cord")
+targets <- lapply(targets, subset, genotype=="N")
+rm(targetspath)
+
+
+## make Asplicounts object
+gbcounts <- lapply(targets, gbCounts, features=features, minReadLength = 100, maxISize = 50000)
+names(gbcounts) <- tissue
+
+## save gbcounts
+countspath <- lapply(tissue, paste0, "_gbcounts_N.RDS")
+countspath <- mapply(file.path, tissue, countspath)
+mapply(saveRDS, gbcounts, countspath)
+
+## make AspliAS object
+asd <- lapply(gbcounts, jCounts, features=features, minReadLength=100)
+
+## save asd 
+path <- lapply(tissue, paste0, "_asd_N.RDS")
+path <- mapply(file.path, tissue, path)
+mapply(saveRDS, asd, path)
+
+
+
+```
+
+#load data
+
+```{r cars}
+
+features <- readRDS("~/johnsonlab_nb/cipn_files/D7_aspli/features2_mmusculusEnsembl.RDS") 
+
+
+# tissue is basename of reports to generate
+tissue <- list("DRG", "PAG", "Spinal_Cord")
+
+# targets
+targetspath <- lapply(tissue, paste0, "_targets.RDS")
+targets <- lapply(targetspath, readRDS)
+names(targets) <- c("targets.drg", "targets.pag", "targets.spinal_cord")
+#targets <- lapply(targets, subset, genotype=="J")
+rm(targetspath)
+
+
+# load gbcounts
+countspath <- lapply(tissue, paste0, "_gbcounts.RDS")
+countspath <- mapply(file.path, tissue, countspath)
+counts <- lapply(countspath, readRDS)
+names(counts) <- (tissue)
+
+# load asd
+path <- lapply(tissue, paste0, "_asd.RDS")
+path <- mapply(file.path, tissue, path)
+asd <- lapply(path, readRDS)
+
+# load asd_J subset
+path <- lapply(tissue, paste0, "_asd_J.RDS")
+path <- mapply(file.path, tissue, path)
+asd_J <- lapply(path, readRDS)
+
+# load asd_N subset 
+path <- lapply(tissue, paste0, "_asd_N.RDS")
+path <- mapply(file.path, tissue, path)
+asd_N <- lapply(path, readRDS)
+
+# load counts_J subset
+path <- lapply(tissue, paste0, "_gbcounts_J.RDS")
+path <- mapply(file.path, tissue, path)
+counts_J <- lapply(path, readRDS)
+
+# load asd_N subset
+path <- lapply(tissue, paste0, "_gbcounts_N.RDS")
+path <- mapply(file.path, tissue, path)
+counts_N <- lapply(path, readRDS)
+
+names(counts_J) <- tissue
+names(counts_N) <- tissue
+
+names(asd_J) <- tissue
+names(asd_N) <- tissue
+
+rm(countspath, path)
+```
+
+# Differential Reports
+## gbDUreport: Bin-based coverage differential signals of AS
+```{r}
+# formula model for analysis
+form1 <- formula(~genotype + tx + sex ) ## genotype, controlling for tx and sex
+form2 <- formula(~genotype*tx + sex ) ## genotype and tx interaction, controlling for sex
+form3 <- formula(~tx + genotype + sex) ## tx, controlling for tx and sex
+
+form <- list(form1, form2, form3)
+names(form) <- c("genotype_con_tx_sex", "genotype_by_tx_con_sex", "tx_con_geno_sex")
+form_names <- list("genotype_con_tx_sex", "genotype_by_tx_con_sex", "tx_con_geno_sex")
+
+## subset by genotypes first; ~tx + sex
+#counts_subset <- lapply(counts, subset, genotype)
+#formtx <- formula(~tx + sex)
+
+
+design1 <-  lapply( targets, model.matrix,object=form1)
+colnames(design1[[1]])
+
+design2 <-  lapply( targets, model.matrix,object=form2)
+colnames(design2[[1]])
+
+design3 <-  lapply( targets, model.matrix,object=form3)
+colnames(design3[[1]])
+
+
+```
+
+## gbDUreport
+### genotype, controlling for tx and sex, form1
+```{r}
+form <- form1
+form_file <- form_names[[1]]
+gb <- lapply(counts, gbDUreport, formula=form)
+names(gb) <- tissue
+asd <- lapply(counts, jCounts, features=features, minReadLength=100)
+names(asd) <- tissue
+
+# Intron/exon counts report
+
+## make and save gb info to directories
+paths <- lapply(tissue, file.path, form_file,"gb_report")
+sapply(paths, dir.create, recursive=TRUE)
+pathsintex <- mapply(file.path,paths, "IntExCount.csv")
+
+# Junction counts report
+cb1  <- lapply(counts, countsb)
+mapply(write.csv, cb1, pathsintex)
+
+pathscj <- mapply(file.path,paths, "Junct.csv")
+
+cj   <- lapply(counts, countsj)
+mapply(write.csv, cb1, pathscj)
+
+# Differential expression report
+DEgenes<- lapply(gb,genesDE)
+pathsDE <- mapply(file.path,paths, "DEgenes.csv")
+mapply(write.csv, cb1, pathsDE)
+```
+
+#### splicing 
+##### jdur
+```{r}
+#form <- form1
+
+jdur <- lapply(asd, jDUreport, formula=form, strongFilter=FALSE)
+names(jdur) <- tissue
+
+```
+
+#### DRG
+```{r}
+tissue <- "DRG"
+sr <- splicingReport(gb[[1]], jdur[[1]], counts[[1]])
+
+# regions of interest
+#Chr1: 46-77Mb
+#Chr14: 103-124.46 Mb
+
+ch1start <- 1000000*46
+ch1end <- 1000000*77
+
+ch14start <- 1000000*103
+ch14end <- 1000000*124.46
+
+# binbased splicing report selected for only regions of interest
+df <- as.data.frame(sr@binbased)
+df.ch1 <- df[grepl("1:",df$gene_coordinates),]
+df.ch14 <- df[grepl("14:",df$gene_coordinates),]
+
+
+df.ch1.region <- df.ch1 %>% 
+  filter(start >= ch1start) %>% 
+  filter(end <= ch1end)
+df.ch14.region <- df.ch14 %>% 
+  filter(start >= ch14start) %>% 
+  filter(end <= ch14end)
+
+write.csv(df.ch1.region, file.path(tissue, form_file, "sr_ch1.csv"))
+write.csv(df.ch14.region, file.path(tissue, form_file, "sr_ch14.csv"))
+
+
+# entire splicing report
+writeSplicingReport( sr, output.dir = file.path(tissue,form_file, "sr"))
+### exportSplicingReport: Export splicing reports in HTML pages.
+
+exportSplicingReports( sr,
+                       output.dir=file.path(tissue, form_file,"sr", "html"),
+                       openInBrowser = FALSE,
+                       maxBinFDR = 0.2,
+                       maxJunctionFDR = 0.2 )
+
+
+
+
+```
+
+#### PAG
+```{r}
+tissue <- "PAG"
+sr <- splicingReport(gb[[2]], jdur[[2]], counts[[2]])
+
+# regions of interest
+#Chr1: 46-77Mb
+#Chr14: 103-124.46 Mb
+
+ch1start <- 1000000*46
+ch1end <- 1000000*77
+
+ch14start <- 1000000*103
+ch14end <- 1000000*124.46
+
+# binbased splicing report selected for only regions of interest
+df <- as.data.frame(sr@binbased)
+df.ch1 <- df[grepl("1:",df$gene_coordinates),]
+df.ch14 <- df[grepl("14:",df$gene_coordinates),]
+
+
+df.ch1.region <- df.ch1 %>% 
+  filter(start >= ch1start) %>% 
+  filter(end <= ch1end)
+df.ch14.region <- df.ch14 %>% 
+  filter(start >= ch14start) %>% 
+  filter(end <= ch14end)
+
+write.csv(df.ch1.region, file.path(tissue, form_file, "sr_ch1.csv"))
+write.csv(df.ch14.region, file.path(tissue, form_file, "sr_ch14.csv"))
+
+
+# entire splicing report
+writeSplicingReport( sr, output.dir = file.path(tissue,form_file, "sr"))
+### exportSplicingReport: Export splicing reports in HTML pages.
+
+exportSplicingReports( sr,
+                       output.dir=file.path(tissue, form_file,"sr", "html"),
+                       openInBrowser = FALSE,
+                       maxBinFDR = 0.2,
+                       maxJunctionFDR = 0.2 )
+
+
+
+
+```
+
+#### Spinal_Cord
+```{r}
+tissue <- "Spinal_Cord"
+sr <- splicingReport(gb[[3]], jdur[[3]], counts[[3]])
+
+# regions of interest
+#Chr1: 46-77Mb
+#Chr14: 103-124.46 Mb
+
+ch1start <- 1000000*46
+ch1end <- 1000000*77
+
+ch14start <- 1000000*103
+ch14end <- 1000000*124.46
+
+# binbased splicing report selected for only regions of interest
+df <- as.data.frame(sr@binbased)
+df.ch1 <- df[grepl("1:",df$gene_coordinates),]
+df.ch14 <- df[grepl("14:",df$gene_coordinates),]
+
+df.ch1.region <- df.ch1 %>% 
+  filter(start >= ch1start) %>% 
+  filter(end <= ch1end)
+df.ch14.region <- df.ch14 %>% 
+  filter(start >= ch14start) %>% 
+  filter(end <= ch14end)
+
+write.csv(df.ch1.region, file.path(tissue, form_file, "sr_ch1.csv"))
+write.csv(df.ch14.region, file.path(tissue, form_file, "sr_ch14.csv"))
+
+
+# entire splicing report
+writeSplicingReport( sr, output.dir = file.path(tissue,form_file, "sr"))
+
+
+### exportSplicingReport: Export splicing reports in HTML pages.
+
+exportSplicingReports( sr,
+                       output.dir=file.path(tissue, form_file,"sr", "html"),
+                       openInBrowser = FALSE,
+                       maxBinFDR = 0.2,
+                       maxJunctionFDR = 0.2 )
+
+
+
+```
+
+
+### genotype and tx interaction, controlling for sex, form2
+```{r}
+form <- form2
+form_file <- form_names[[2]]
+gb <- lapply(counts, gbDUreport, formula=form)
+names(gb) <- names(counts)
+
+tissue <- names(counts)
+# Intron/exon counts report
+
+## make and save gb info to directories
+paths <- lapply(tissue, file.path, form_file,"gb_report")
+sapply(paths, dir.create, recursive=TRUE)
+pathsintex <- mapply(file.path,paths, "IntExCount.csv")
+
+# Junction counts report
+cb1  <- lapply(counts, countsb)
+mapply(write.csv, cb1, pathsintex)
+
+pathscj <- mapply(file.path,paths, "Junct.csv")
+
+cj   <- lapply(counts, countsj)
+mapply(write.csv, cb1, pathscj)
+
+# Differential expression report
+DEgenes<- lapply(gb,genesDE)
+pathsDE <- mapply(file.path,paths, "DEgenes.csv")
+mapply(write.csv, cb1, pathsDE)
+```
+
+#### splicing
+##### jdur
+```{r}
+
+
+jdur <- lapply(asd, jDUreport, formula=form, strongFilter=FALSE)
+names(jdur) <- tissue
+
+```
+
+##### DRG
+```{r}
+tissue <- "DRG"
+sr <- splicingReport(gb[[1]], jdur[[1]], counts[[1]])
+
+# regions of interest
+#Chr1: 46-77Mb
+#Chr14: 103-124.46 Mb
+
+ch1start <- 1000000*46
+ch1end <- 1000000*77
+
+ch14start <- 1000000*103
+ch14end <- 1000000*124.46
+
+# binbased splicing report selected for only regions of interest
+df <- as.data.frame(sr@binbased)
+df.ch1 <- df[grepl("1:",df$gene_coordinates),]
+df.ch14 <- df[grepl("14:",df$gene_coordinates),]
+
+#library(tidyverse)
+df.ch1.region <- df.ch1 %>% 
+  filter(start >= ch1start) %>% 
+  filter(end <= ch1end)
+df.ch14.region <- df.ch14 %>% 
+  filter(start >= ch14start) %>% 
+  filter(end <= ch14end)
+
+write.csv(df.ch1.region, file.path(tissue, form_file, "sr_ch1.csv"))
+write.csv(df.ch14.region, file.path(tissue, form_file, "sr_ch14.csv"))
+
+
+# entire splicing report
+writeSplicingReport( sr, output.dir = file.path(tissue,form_file, "sr"))
+### exportSplicingReport: Export splicing reports in HTML pages.
+
+exportSplicingReports( sr,
+                       output.dir=file.path(tissue, form_file,"sr", "html"),
+                       openInBrowser = FALSE,
+                       maxBinFDR = 0.2,
+                       maxJunctionFDR = 0.2 )
+
+
+
+
+```
+
+##### PAG
+```{r}
+tissue <- "PAG"
+sr <- splicingReport(gb[[2]], jdur[[2]], counts[[2]])
+
+# regions of interest
+#Chr1: 46-77Mb
+#Chr14: 103-124.46 Mb
+
+ch1start <- 1000000*46
+ch1end <- 1000000*77
+
+ch14start <- 1000000*103
+ch14end <- 1000000*124.46
+
+# binbased splicing report selected for only regions of interest
+df <- as.data.frame(sr@binbased)
+df.ch1 <- df[grepl("1:",df$gene_coordinates),]
+df.ch14 <- df[grepl("14:",df$gene_coordinates),]
+
+#library(tidyverse)
+df.ch1.region <- df.ch1 %>% 
+  filter(start >= ch1start) %>% 
+  filter(end <= ch1end)
+df.ch14.region <- df.ch14 %>% 
+  filter(start >= ch14start) %>% 
+  filter(end <= ch14end)
+
+write.csv(df.ch1.region, file.path(tissue, form_file, "sr_ch1.csv"))
+write.csv(df.ch14.region, file.path(tissue, form_file, "sr_ch14.csv"))
+
+
+# entire splicing report
+writeSplicingReport( sr, output.dir = file.path(tissue,form_file, "sr"))
+### exportSplicingReport: Export splicing reports in HTML pages.
+
+exportSplicingReports( sr,
+                       output.dir=file.path(tissue, form_file,"sr", "html"),
+                       openInBrowser = FALSE,
+                       maxBinFDR = 0.2,
+                       maxJunctionFDR = 0.2 )
+
+
+
+
+```
+
+##### Spinal_Cord
+```{r}
+tissue <- "Spinal_Cord"
+sr <- splicingReport(gb[[3]], jdur[[3]], counts[[3]])
+
+# regions of interest
+#Chr1: 46-77Mb
+#Chr14: 103-124.46 Mb
+
+ch1start <- 1000000*46
+ch1end <- 1000000*77
+
+ch14start <- 1000000*103
+ch14end <- 1000000*124.46
+
+# binbased splicing report selected for only regions of interest
+df <- as.data.frame(sr@binbased)
+df.ch1 <- df[grepl("1:",df$gene_coordinates),]
+df.ch14 <- df[grepl("14:",df$gene_coordinates),]
+
+df.ch1.region <- df.ch1 %>% 
+  filter(start >= ch1start) %>% 
+  filter(end <= ch1end)
+df.ch14.region <- df.ch14 %>% 
+  filter(start >= ch14start) %>% 
+  filter(end <= ch14end)
+
+write.csv(df.ch1.region, file.path(tissue, form_file, "sr_ch1.csv"))
+write.csv(df.ch14.region, file.path(tissue, form_file, "sr_ch14.csv"))
+
+
+# entire splicing report
+writeSplicingReport( sr, output.dir = file.path(tissue, form_file, "sr"))
+
+
+### exportSplicingReport: Export splicing reports in HTML pages.
+
+exportSplicingReports( sr,
+                       output.dir=file.path(tissue, form_file,"sr", "html"),
+                       openInBrowser = FALSE,
+                       maxBinFDR = 0.2,
+                       maxJunctionFDR = 0.2 )
+
+
+
+```
+
+### tx, controlling for genotype and sex, form3
+```{r}
+form <- form3
+form_file <- form_names[[3]]
+gb <- lapply(counts, gbDUreport, formula=form)
+names(gb) <- names(counts)
+
+tissue <- names(counts)
+# Intron/exon counts report
+
+## make and save gb info to directories
+paths <- lapply(tissue, file.path, form_file,"gb_report")
+sapply(paths, dir.create, recursive=TRUE)
+pathsintex <- mapply(file.path,paths, "IntExCount.csv")
+
+# Junction counts report
+cb1  <- lapply(counts, countsb)
+mapply(write.csv, cb1, pathsintex)
+
+pathscj <- mapply(file.path,paths, "Junct.csv")
+
+cj   <- lapply(counts, countsj)
+mapply(write.csv, cb1, pathscj)
+
+# Differential expression report
+DEgenes<- lapply(gb,genesDE)
+pathsDE <- mapply(file.path,paths, "DEgenes.csv")
+mapply(write.csv, cb1, pathsDE)
+
+
+jdur <- lapply(asd, jDUreport, formula=form, strongFilter=FALSE)
+names(jdur) <- tissue
+```
+
+#### splicing 
+##### DRG
+```{r}
+tissue <- "DRG"
+sr <- splicingReport(gb[[1]], jdur[[1]], counts[[1]])
+
+# regions of interest
+#Chr1: 46-77Mb
+#Chr14: 103-124.46 Mb
+
+ch1start <- 1000000*46
+ch1end <- 1000000*77
+
+ch14start <- 1000000*103
+ch14end <- 1000000*124.46
+
+# binbased splicing report selected for only regions of interest
+df <- as.data.frame(sr@binbased)
+df.ch1 <- df[grepl("1:",df$gene_coordinates),]
+df.ch14 <- df[grepl("14:",df$gene_coordinates),]
+
+#library(tidyverse)
+df.ch1.region <- df.ch1 %>% 
+  filter(start >= ch1start) %>% 
+  filter(end <= ch1end)
+df.ch14.region <- df.ch14 %>% 
+  filter(start >= ch14start) %>% 
+  filter(end <= ch14end)
+
+write.csv(df.ch1.region, file.path(tissue, form_file, "sr_ch1.csv"))
+write.csv(df.ch14.region, file.path(tissue, form_file, "sr_ch14.csv"))
+
+
+# entire splicing report
+writeSplicingReport( sr, output.dir = file.path(tissue,form_file, "sr"))
+### exportSplicingReport: Export splicing reports in HTML pages.
+
+exportSplicingReports( sr,
+                       output.dir=file.path(tissue, form_file,"sr", "html"),
+                       openInBrowser = FALSE,
+                       maxBinFDR = 0.2,
+                       maxJunctionFDR = 0.2 )
+
+
+
+
+```
+##### PAG
+```{r}
+tissue <- "PAG"
+sr <- splicingReport(gb[[2]], jdur[[2]], counts[[2]])
+
+# regions of interest
+#Chr1: 46-77Mb
+#Chr14: 103-124.46 Mb
+
+ch1start <- 1000000*46
+ch1end <- 1000000*77
+
+ch14start <- 1000000*103
+ch14end <- 1000000*124.46
+
+# binbased splicing report selected for only regions of interest
+df <- as.data.frame(sr@binbased)
+df.ch1 <- df[grepl("1:",df$gene_coordinates),]
+df.ch14 <- df[grepl("14:",df$gene_coordinates),]
+
+#library(tidyverse)
+df.ch1.region <- df.ch1 %>% 
+  filter(start >= ch1start) %>% 
+  filter(end <= ch1end)
+df.ch14.region <- df.ch14 %>% 
+  filter(start >= ch14start) %>% 
+  filter(end <= ch14end)
+
+write.csv(df.ch1.region, file.path(tissue, form_file, "sr_ch1.csv"))
+write.csv(df.ch14.region, file.path(tissue, form_file, "sr_ch14.csv"))
+
+
+# entire splicing report
+writeSplicingReport( sr, output.dir = file.path(tissue,form_file, "sr"))
+### exportSplicingReport: Export splicing reports in HTML pages.
+
+exportSplicingReports( sr,
+                       output.dir=file.path(tissue, form_file,"sr", "html"),
+                       openInBrowser = FALSE,
+                       maxBinFDR = 0.2,
+                       maxJunctionFDR = 0.2 )
+
+
+
+
+```
+
+##### Spinal_Cord
+```{r}
+tissue <- "Spinal_Cord"
+sr <- splicingReport(gb[[3]], jdur[[3]], counts[[3]])
+
+# regions of interest
+#Chr1: 46-77Mb
+#Chr14: 103-124.46 Mb
+
+ch1start <- 1000000*46
+ch1end <- 1000000*77
+
+ch14start <- 1000000*103
+ch14end <- 1000000*124.46
+
+# binbased splicing report selected for only regions of interest
+df <- as.data.frame(sr@binbased)
+df.ch1 <- df[grepl("1:",df$gene_coordinates),]
+df.ch14 <- df[grepl("14:",df$gene_coordinates),]
+
+df.ch1.region <- df.ch1 %>% 
+  filter(start >= ch1start) %>% 
+  filter(end <= ch1end)
+df.ch14.region <- df.ch14 %>% 
+  filter(start >= ch14start) %>% 
+  filter(end <= ch14end)
+
+write.csv(df.ch1.region, file.path(tissue, form_file, "sr_ch1.csv"))
+write.csv(df.ch14.region, file.path(tissue, form_file, "sr_ch14.csv"))
+
+
+# entire splicing report
+writeSplicingReport( sr, output.dir = file.path(tissue, form_file, "sr"))
+
+
+### exportSplicingReport: Export splicing reports in HTML pages.
+
+exportSplicingReports( sr,
+                       output.dir=file.path(tissue, form_file,"sr", "html"),
+                       openInBrowser = FALSE,
+                       maxBinFDR = 0.2,
+                       maxJunctionFDR = 0.2 )
+
+
+
+```
+
+
+
+
+# Reports from excluded genotype; tx, excluding genotype, controlling for sex, formtx
+```{r}
+
+
+
+form <- formula(~tx + sex) ## subset counts by genotypes first; ~tx + sex
+#counts_subset <- lapply(counts, subset, genotype)
+#formtx <- formula(~tx + sex)
+
+
+  
+form_file <- "subset_N"
+gb_N <- lapply(counts_N, gbDUreport, formula=form)
+names(gb_N) <- names(counts)
+
+#tissue <- names(asd_J)
+# Intron/exon counts report
+
+## make and save gb info to directories
+paths <- lapply(tissue, file.path, form_file,"gb_report")
+sapply(paths, dir.create, recursive=TRUE)
+pathsintex <- mapply(file.path,paths, "IntExCount.csv")
+
+# Junction counts report
+cb1  <- lapply(counts_N, countsb)
+mapply(write.csv, cb1, pathsintex)
+
+pathscj <- mapply(file.path,paths, "Junct.csv")
+
+cj   <- lapply(counts_N, countsj)
+mapply(write.csv, cb1, pathscj)
+
+# Differential expression report
+DEgenes<- lapply(gb_N,genesDE)
+pathsDE <- mapply(file.path,paths, "DEgenes.csv")
+mapply(write.csv, cb1, pathsDE)
+```
+#### subset_J gb
+```{r}
+form_file <- "subset_J"
+gb_J <- lapply(counts_J, gbDUreport, formula=form)
+names(gb_J) <- names(counts)
+
+tissue <- names(counts_J)
+# Intron/exon counts report
+
+## make and save gb info to directories
+paths <- lapply(tissue, file.path, form_file,"gb_report")
+sapply(paths, dir.create, recursive=TRUE)
+pathsintex <- mapply(file.path,paths, "IntExCount.csv")
+
+# Junction counts report
+cb1  <- lapply(counts_J, countsb)
+mapply(write.csv, cb1, pathsintex)
+
+pathscj <- mapply(file.path,paths, "Junct.csv")
+
+cj   <- lapply(counts_J, countsj)
+mapply(write.csv, cb1, pathscj)
+
+# Differential expression report
+DEgenes<- lapply(gb_J,genesDE)
+pathsDE <- mapply(file.path,paths, "DEgenes.csv")
+mapply(write.csv, cb1, pathsDE)
+```
+
+### splicing 
+##### jdur
+```{r}
+
+# asd_N <- lapply(counts_N, jCounts, features=features, minReadLength=100)
+# asd_J <- lapply(counts_J, jCounts, features=features, minReadLength=100)
+
+## save asd
+path <- lapply(tissue, paste0, "_asd_N.RDS")
+path <- mapply(file.path, tissue, path)
+# mapply(saveRDS, asd_N, path)
+asd_N <- lapply(path, readRDS)
+
+## save asd
+path <- lapply(tissue, paste0, "_asd_J.RDS")
+path <- mapply(file.path, tissue, path)
+#mapply(saveRDS, asd_J, path)
+asd_J <- lapply(path, readRDS)
+
+
+jdur_N <- lapply(asd_N, jDUreport, formula=form, strongFilter=FALSE)
+jdur_J <- lapply(asd_J, jDUreport, formula=form, strongFilter=FALSE )
+
+```
+#### Subsets by Genotype splicing reports
+```{r}
+sr <- mapply(splicingReport, gb_J, jdur_J, counts_J) 
+sr_N <- mapply(splicingReport, gb_N, jdur_N, counts_N) 
+
+names(sr) <- tissue
+names(sr_N) <- tissue
+# regions of interest
+#Chr1: 46-77Mb
+#Chr14: 103-124.46 Mb
+
+ch1start <- 1000000*46
+ch1end <- 1000000*77
+
+ch14start <- 1000000*103
+ch14end <- 1000000*124.46
+
+# binbased splicing report selected for only regions of interest
+#df <- as.data.frame(sr@binbased)
+bins_J <- lapply(sr, binbased )
+bins_N <- lapply(sr_N, binbased)
+
+
+bins_J.ch1 <- list(bins_J[[1]][grepl("1:",bins_J[[1]]$gene_coordinates),],
+                   bins_J[[2]][grepl("1:",bins_J[[2]]$gene_coordinates),],
+                   bins_J[[3]][grepl("1:",bins_J[[3]]$gene_coordinates),])
+bins_N.ch1 <- list(bins_N[[1]][grepl("1:",bins_N[[1]]$gene_coordinates),],
+                   bins_N[[2]][grepl("1:",bins_N[[2]]$gene_coordinates),],
+                   bins_N[[3]][grepl("1:",bins_N[[3]]$gene_coordinates),])
+
+bins_J.ch14 <- list(bins_J[[1]][grepl("14:",bins_J[[1]]$gene_coordinates),],
+                   bins_J[[2]][grepl("14:",bins_J[[2]]$gene_coordinates),],
+                   bins_J[[3]][grepl("14:",bins_J[[3]]$gene_coordinates),])
+bins_N.ch14 <- list(bins_N[[1]][grepl("14:",bins_N[[1]]$gene_coordinates),],
+                   bins_N[[2]][grepl("14:",bins_N[[2]]$gene_coordinates),],
+                   bins_N[[3]][grepl("14:",bins_N[[3]]$gene_coordinates),])
+
+#df.ch14 <- df[grepl("14:",df$gene_coordinates),]
+
+#library(tidyverse)
+bins_J.ch1.region <- lapply(bins_J.ch1, function(x){
+        x %>% 
+     filter(start >= ch1start) %>% 
+     filter(end <= ch1end)
+})
+
+bins_N.ch1.region <- lapply(bins_N.ch1, function(x){
+        x %>% 
+     filter(start >= ch1start) %>% 
+     filter(end <= ch1end)
+})
+
+# ch14 filtered regions
+bins_J.ch14.region <- lapply(bins_J.ch14, function(x){
+        x %>% 
+     filter(start >= ch14start) %>% 
+     filter(end <= ch14end)
+})
+
+bins_N.ch14.region <- lapply(bins_N.ch14, function(x){
+        x %>% 
+     filter(start >= ch14start) %>% 
+     filter(end <= ch14end)
+})
+
+
+###############
+form_file <- "subset_N"
+# ch1_N region
+path <- lapply(tissue, file.path, form_file, "sr_ch1_N_region.csv")
+mapply(write.csv,  bins_N.ch1.region, path)
+
+# ch14_N region
+path <- lapply(tissue, file.path, form_file, "sr_ch14_N_region.csv")
+mapply(write.csv,  bins_N.ch14.region, path)
+
+
+form_file <- "subset_J"
+# ch1_J region
+path <- lapply(tissue, file.path, form_file, "sr_ch1_J_region.csv")
+mapply(write.csv,  bins_J.ch1.region, path)
+
+# ch14_J region
+path <- lapply(tissue, file.path, form_file, "sr_ch14_J_region.csv")
+mapply(write.csv,  bins_J.ch14.region, path)
+
+
+
+
+# entire splicing report
+form_file <- "subset_J"
+path <- lapply(tissue, file.path, form_file, "sr")
+
+mapply(writeSplicingReport, sr, path)
+#writeSplicingReport( sr, output.dir = file.path(tissue,form_file, "sr"))
+### exportSplicingReport: Export splicing reports in HTML pages.
+
+path <- lapply(tissue, file.path, form_file, "sr", "html")
+mapply(function(x, y){exportSplicingReports(x,
+                                         output.dir=y,
+                       openInBrowser = FALSE,
+                       maxBinFDR = 0.2,
+                       maxJunctionFDR = 0.2 )}, sr, path)
+
+
+# entire splicing report
+form_file <- "subset_N"
+path <- lapply(tissue, file.path, form_file, "sr")
+
+mapply(writeSplicingReport, sr_N, path)
+#writeSplicingReport( sr, output.dir = file.path(tissue,form_file, "sr"))
+### exportSplicingReport: Export splicing reports in HTML pages.
+
+path <- lapply(tissue, file.path, form_file, "sr", "html")
+mapply(function(x, y){exportSplicingReports(x,
+                                         output.dir=y,
+                       openInBrowser = FALSE,
+                       maxBinFDR = 0.2,
+                       maxJunctionFDR = 0.2 )}, sr_N, path)
+
+```
+
+#sessioninfo
+```{r}
+sessionInfo()
+```
+
